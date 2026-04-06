@@ -125,17 +125,18 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:1
 .user-role{font-size:0.7rem;color:var(--text2)}
 
 .main{margin-left:var(--sidebar);flex:1;padding:2rem;min-width:0}
-.hamburger{display:none;position:fixed;bottom:1.5rem;right:1.5rem;z-index:200;background:var(--accent);
-  color:var(--bg);border:none;border-radius:50%;width:52px;height:52px;font-size:1.3rem;cursor:pointer;
-  box-shadow:0 4px 16px rgba(0,0,0,0.35);
-  padding-bottom:env(safe-area-inset-bottom,0)}
+.hamburger{display:none;position:fixed;bottom:calc(1.5rem + env(safe-area-inset-bottom,0px));right:1.25rem;
+  z-index:9000;background:var(--accent);color:var(--bg);border:none;border-radius:50%;
+  width:56px;height:56px;font-size:1.4rem;cursor:pointer;
+  box-shadow:0 4px 20px rgba(0,0,0,0.4),0 0 0 3px rgba(232,160,32,0.2)}
 .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99}
 @media(max-width:768px){
   .hamburger{display:flex;align-items:center;justify-content:center}
   .sidebar{transform:translateX(-100%)}
   .sidebar.open{transform:translateX(0)}
   .overlay.open{display:block}
-  .main{margin-left:0;padding:1rem;padding-top:calc(1rem + env(safe-area-inset-top,0px));padding-bottom:calc(5rem + env(safe-area-inset-bottom,0px))}
+  .main{margin-left:0;padding:1rem;padding-top:1rem;padding-bottom:calc(6rem + env(safe-area-inset-bottom,0px))}
+  .sidebar{padding-top:calc(1.25rem + env(safe-area-inset-top,20px))}
 }
 
 /* ══ PAGE ══ */
@@ -215,8 +216,10 @@ input[readonly]{background:var(--surface3);color:var(--text2);cursor:default}
 .amt-blue{font-family:var(--mono);font-weight:600;color:var(--blue)}
 
 /* ══ TOAST ══ */
-.toast{position:fixed;bottom:1.5rem;right:1.5rem;background:var(--text);color:var(--bg);padding:0.7rem 1.2rem;
-  border-radius:40px;font-size:0.83rem;font-weight:700;z-index:9999;box-shadow:var(--shadow-lg);animation:slideup .25s ease}
+.toast{position:fixed;top:1.5rem;right:1rem;background:var(--text);color:var(--bg);padding:0.7rem 1.2rem;
+  border-radius:40px;font-size:0.83rem;font-weight:700;z-index:9999;box-shadow:var(--shadow-lg);animation:slidedown .25s ease;
+  max-width:calc(100vw - 2rem)}
+@keyframes slidedown{from{transform:translateY(-20px);opacity:0}to{transform:translateY(0);opacity:1}}
 @keyframes slideup{from{transform:translateY(16px);opacity:0}to{transform:translateY(0);opacity:1}}
 
 /* ══ MODAL ══ */
