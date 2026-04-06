@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, viewport-fit=cover, user-scalable=no">
 <title>Royal Barbershop Pro</title>
 
 <!-- PWA -->
@@ -80,7 +80,9 @@ body.light{
   --shadow-lg:0 4px 20px rgba(0,0,0,0.1);
 }
 
-body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:100vh;transition:background .3s,color .3s}
+html{touch-action:manipulation}
+body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:100vh;transition:background .3s,color .3s;
+  overflow-x:hidden;-webkit-text-size-adjust:100%}
 
 /* ══ SCROLLBAR ══ */
 ::-webkit-scrollbar{width:6px;height:6px}
@@ -174,7 +176,7 @@ tbody tr:hover td{background:var(--surface2)}
 .fg.span2{grid-column:span 2}
 .fg.span3{grid-column:span 3}
 label{font-size:0.72rem;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em}
-input,select,textarea{padding:0.55rem 0.75rem;border:1px solid var(--border);border-radius:var(--r);
+input,select,textarea{padding:0.55rem 0.75rem;border:1px solid var(--border);border-radius:var(--r);font-size:16px!important;
   background:var(--surface2);color:var(--text);font-family:var(--font);font-size:0.88rem;width:100%;transition:border-color .15s}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
 textarea{resize:vertical;min-height:80px}
