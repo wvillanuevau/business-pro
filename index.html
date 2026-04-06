@@ -1293,34 +1293,78 @@ function renderRecordatorios(){
 
   // Render plantillas
   const filasPlantillas = plantillas.map((p,idx)=>`
-    <div class="card" style="margin-bottom:.75rem">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
+    <div class="card" style="margin-bottom:.75rem;border-left:3px solid var(--accent)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem;flex-wrap:wrap;gap:.5rem">
         <strong>${p.nombre}</strong>
         <div style="display:flex;gap:.3rem">
-          <button class="icon-btn" data-action="editPlantilla" data-idx="${idx}">✏️</button>
-          ${idx>=4?`<button class="icon-btn" data-action="delPlantilla" data-idx="${idx}">🗑️</button>`:""}
+          <button class="icon-btn" data-action="editPlantilla" data-idx="${idx}" title="Editar">✏️</button>
+          <button class="icon-btn" data-action="delPlantilla" data-idx="${idx}" title="Eliminar">🗑️</button>
         </div>
       </div>
       <div class="sms-preview">${p.texto}</div>
-      <div style="font-size:.72rem;color:var(--text2);margin-top:.4rem">Variables disponibles: <span class="template-chip">{nombre}</span> <span class="template-chip">{negocio}</span> <span class="template-chip">{fecha}</span> <span class="template-chip">{hora}</span> <span class="template-chip">{servicio}</span></div>
+      <div style="font-size:.72rem;color:var(--text2);margin-top:.4rem">Variables: <span class="template-chip">{nombre}</span> <span class="template-chip">{negocio}</span> <span class="template-chip">{fecha}</span> <span class="template-chip">{hora}</span> <span class="template-chip">{servicio}</span></div>
     </div>
   `).join("");
 
-  return `<div class="page-header"><div class="page-title">💬 WhatsApp — Recordatorios</div></div>
+  // ── Panel alertas 24h y 1h ──
+  const ahora2 = new Date();
+  const citasAlerta24 = STATE.citas.filter(c=>{
+    if(!c.clienteId||!c.hora) return false;
+    const dt = new Date(c.fecha+"T"+c.hora+":00");
+    const diff = (dt-ahora2)/3600000;
+    return diff>0 && diff<=26;
+  }).sort((a,b)=>a.fecha.localeCompare(b.fecha)||a.hora.localeCompare(b.hora));
 
-  <div class="card">
-    <div class="card-title">💬 Cómo funciona — WhatsApp Web</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;font-size:.83rem;color:var(--text2)">
-      <div style="display:flex;gap:.75rem;align-items:flex-start"><span style="font-size:1.5rem">🔔</span><div><strong style="color:var(--text)">Alertas automáticas</strong><br>El sistema detecta citas a 24h y 1h antes y muestra una alerta en pantalla con botón de envío directo.</div></div>
-      <div style="display:flex;gap:.75rem;align-items:flex-start"><span style="font-size:1.5rem">💬</span><div><strong style="color:var(--text)">Un clic → WhatsApp Web</strong><br>Se abre <code>wa.me</code> con el número y mensaje ya escritos. Tú solo presionas <strong>Enviar</strong> en WhatsApp.</div></div>
-      <div style="display:flex;gap:.75rem;align-items:flex-start"><span style="font-size:1.5rem">✏️</span><div><strong style="color:var(--text)">Plantillas personalizadas</strong><br>Crea mensajes con variables: <code>{nombre}</code>, <code>{hora}</code>, <code>{fecha}</code>, <code>{servicio}</code>, <code>{negocio}</code>.</div></div>
-      <div style="display:flex;gap:.75rem;align-items:flex-start"><span style="font-size:1.5rem">🆓</span><div><strong style="color:var(--text)">100% gratis</strong><br>No requiere API ni configuración. Solo necesitas WhatsApp abierto en tu PC o celular.</div></div>
+  const citasAlerta1 = STATE.citas.filter(c=>{
+    if(!c.clienteId||!c.hora) return false;
+    const dt = new Date(c.fecha+"T"+c.hora+":00");
+    const diff = (dt-ahora2)/3600000;
+    return diff>0 && diff<=1.5;
+  }).sort((a,b)=>a.hora.localeCompare(b.hora));
+
+  const renderAlertaFila=(c,tipo)=>{
+    const cli=STATE.clientes.find(x=>x.id===c.clienteId);
+    const dt=new Date(c.fecha+"T"+c.hora+":00");
+    const diffMin=Math.round((dt-ahora2)/60000);
+    const restante=diffMin>60?`${Math.round(diffMin/60)}h`:`${diffMin}min`;
+    const enviado=(LS.load("np_historial_wa")||[]).some(h=>h.citaId===c.id&&h.tipo===tipo);
+    return `<div style="display:flex;align-items:center;gap:.75rem;padding:.65rem;background:var(--surface2);border-radius:var(--r);margin-bottom:.5rem;flex-wrap:wrap;gap:.5rem">
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700;font-size:.88rem">${c.titulo}</div>
+        <div style="font-size:.78rem;color:var(--text2)">${cli?.nombre||"Sin cliente"} · ${c.fecha} ${c.hora} · <strong style="color:${tipo==="1h"?"var(--red)":"var(--accent)"}">en ${restante}</strong></div>
+        <div style="font-size:.75rem;color:var(--text2)">${cli?.telefono||"⚠️ Sin teléfono"}</div>
+      </div>
+      ${enviado?`<span class="badge bg-green">✓ Enviado</span>`:""}
+      ${cli?.telefono?`<button class="icon-btn" data-action="${tipo==="1h"?"waAlerta1":"waAlerta24"}" data-citaid="${c.id}" style="background:var(--green);color:white;border-color:var(--green)">💬 Enviar</button>`:`<span style="font-size:.75rem;color:var(--red)">Sin teléfono</span>`}
+    </div>`;
+  };
+
+  const alertas24HTML = citasAlerta24.length
+    ? citasAlerta24.map(c=>renderAlertaFila(c,"24h")).join("")
+    : `<div class="empty" style="padding:1rem"><p>Sin citas en las próximas 24 horas</p></div>`;
+  const alertas1HTML = citasAlerta1.length
+    ? citasAlerta1.map(c=>renderAlertaFila(c,"1h")).join("")
+    : `<div class="empty" style="padding:1rem"><p>Sin citas en la próxima hora</p></div>`;
+
+  return `<div class="page-header"><div class="page-title">💬 WhatsApp — Recordatorios</div>
+    <button class="btn btn-ghost btn-sm" onclick="goTab('whatsapp')">🔄 Actualizar</button>
+  </div>
+
+  <div class="two-col">
+    <div class="card" style="border-top:3px solid var(--red)">
+      <div class="card-title" style="color:var(--red)">⏰ Recordatorios — Próxima 1 hora</div>
+      <div class="card-sub">Citas que ocurren en los próximos 60 minutos</div>
+      ${alertas1HTML}
     </div>
-    <div class="alert alert-success" style="margin-top:1rem">✅ <strong>Funciona desde PC:</strong> Asegúrate de tener WhatsApp Web abierto en <a href="https://web.whatsapp.com" target="_blank" style="color:var(--green)">web.whatsapp.com</a> antes de enviar mensajes.</div>
+    <div class="card" style="border-top:3px solid var(--accent)">
+      <div class="card-title" style="color:var(--accent)">🔔 Recordatorios — Próximas 24 horas</div>
+      <div class="card-sub">Citas de mañana — envía el recordatorio hoy</div>
+      ${alertas24HTML}
+    </div>
   </div>
 
   <div class="card">
-    <div class="card-title">📅 Citas próximas (7 días) — Envío manual de recordatorios</div>
+    <div class="card-title">📅 Citas próximas (7 días)</div>
     <div class="table-wrap"><table>
       <thead><tr><th>Fecha / Hora</th><th>Servicio</th><th>Cliente</th><th>Teléfono</th><th>Estado</th><th>Acciones</th></tr></thead>
       <tbody>${filasCitas}</tbody>
@@ -1357,12 +1401,14 @@ function renderRecordatorios(){
       <div class="page-title" style="font-size:1.1rem;margin:.75rem 0">📋 Historial de mensajes WhatsApp enviados</div>
       <div class="card">
         <div id="historialRem">
-          ${(LS.load("historial_sms")||[]).slice(0,10).map(h=>`
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:.4rem 0;border-bottom:1px solid var(--border);font-size:.82rem">
-              <div><strong>${h.cliente}</strong> — ${h.plantilla}</div>
-              <div style="color:var(--text2)">${h.fecha} ${h.hora}</div>
-            </div>
-          `).join("")||`<div class="empty"><p>Sin envíos registrados</p></div>`}
+          ${(()=>{
+            const hist=(LS.load("np_historial_wa")||[]).slice(0,20);
+            if(!hist.length) return `<div class="empty"><div class="empty-icon">💬</div><p>Sin mensajes enviados aún</p></div>`;
+            return hist.map(h=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:.82rem;flex-wrap:wrap;gap:.25rem">
+              <div><span class="badge bg-green" style="font-size:.65rem">💬</span> <strong>${h.cliente}</strong> <span style="color:var(--text2)">— ${h.plantilla}</span></div>
+              <div style="color:var(--text2);font-size:.75rem">${h.fecha} ${h.hora}</div>
+            </div>`).join("");
+          })()}
         </div>
       </div>
     </div>
@@ -2428,9 +2474,9 @@ function attachClientesEvents(){
 }
 
 // ── RECORDATORIOS ──
-function registrarHistorialWA(cliente, plantilla){
+function registrarHistorialWA(cliente, plantilla, citaId=null, tipo=null){
   let h=[]; try{ h=JSON.parse(localStorage.getItem("np_historial_wa")||"[]"); }catch(e){}
-  h.unshift({cliente,plantilla,fecha:today(),hora:nowTime()});
+  h.unshift({cliente,plantilla,citaId,tipo,fecha:today(),hora:nowTime()});
   if(h.length>50) h.length=50;
   localStorage.setItem("np_historial_wa",JSON.stringify(h));
 }
@@ -2463,7 +2509,7 @@ function attachRecordatoriosEvents(){
 
   $$("[data-action='delCita2']").forEach(b=>b.addEventListener("click",()=>{
     const id=parseInt(b.dataset.id);
-    if(confirm2("¿Eliminar cita?")){ STATE.citas=STATE.citas.filter(c=>c.id!==id); saveAll(); toast("🗑️ Eliminada"); goTab("whatsapp"); }
+    if(confirm2("¿Eliminar cita?")){ STATE.citas=STATE.citas.filter(c=>c.id!==id); saveAll(); toast("🗑️ Cita eliminada"); goTab("whatsapp"); }
   }));
 
   // Previsualización
@@ -2546,6 +2592,7 @@ function attachRecordatoriosEvents(){
   $$("[data-action='delPlantilla']").forEach(b=>b.addEventListener("click",()=>{
     const idx=parseInt(b.dataset.idx);
     const plantillas=getPlantillas();
+    if(plantillas.length<=1){ toast("⚠️ Necesitas al menos 1 plantilla","warn"); return; }
     if(confirm2("¿Eliminar esta plantilla?")){
       plantillas.splice(idx,1);
       savePlantillas(plantillas);
@@ -2673,10 +2720,11 @@ function attachAgendaEvents(){
     saveAll(); toast("✅ Cita guardada","ok"); goTab("agenda");
   });
 
-  $$("[data-action='delCita']").forEach(b=>b.addEventListener("click",()=>{
-    const id=parseInt(b.dataset.id);
-    if(confirm2("¿Eliminar cita?")){ STATE.citas=STATE.citas.filter(c=>c.id!==id); saveAll(); toast("🗑️ Eliminada"); goTab("agenda"); }
-  }));
+  // Eliminar desde tabla de hoy (delCita) y desde cualquier otra tabla (delCita2)
+  const eliminarCita=(id)=>{
+    if(confirm2("¿Eliminar cita?")){ STATE.citas=STATE.citas.filter(c=>c.id!==id); saveAll(); toast("🗑️ Cita eliminada"); goTab("agenda"); }
+  };
+  $$("[data-action='delCita']").forEach(b=>b.addEventListener("click",()=>eliminarCita(parseInt(b.dataset.id))));
 }
 
 // ── CONTABILIDAD ──
@@ -2958,7 +3006,11 @@ const PLANTILLAS_DEFAULT = [
 
 function getPlantillas(){
   const saved = LS.load("plantillas");
-  return saved && saved.length ? saved : [...PLANTILLAS_DEFAULT];
+  if(saved && saved.length) return saved;
+  // Primera vez: guardar las por defecto en LS para que sean editables
+  const defaults = [...PLANTILLAS_DEFAULT];
+  savePlantillas(defaults);
+  return defaults;
 }
 function savePlantillas(pl){ LS.save("plantillas", pl); }
 
