@@ -99,8 +99,10 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:1
 /* ══ LAYOUT ══ */
 .app{display:flex;min-height:100vh}
 .sidebar{width:var(--sidebar);min-height:100vh;background:var(--surface);border-right:1px solid var(--border);
-  display:flex;flex-direction:column;padding:1.25rem 0.75rem;position:fixed;top:0;left:0;bottom:0;z-index:100;
-  transition:transform .3s}
+  display:flex;flex-direction:column;padding:1.25rem 0.75rem;
+  padding-top:calc(1.25rem + env(safe-area-inset-top,0px));
+  padding-bottom:calc(1.25rem + env(safe-area-inset-bottom,0px));
+  position:fixed;top:0;left:0;bottom:0;z-index:100;transition:transform .3s}
 .sidebar-logo{font-family:var(--font-display);font-size:1.05rem;font-weight:800;color:var(--accent);
   padding:0 0.5rem;margin-bottom:0.2rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sidebar-sub{font-size:0.72rem;color:var(--text3);padding:0 0.5rem;margin-bottom:1.5rem}
@@ -123,15 +125,17 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:1
 .user-role{font-size:0.7rem;color:var(--text2)}
 
 .main{margin-left:var(--sidebar);flex:1;padding:2rem;min-width:0}
-.hamburger{display:none;position:fixed;top:0.8rem;left:0.8rem;z-index:200;background:var(--accent);
-  color:var(--bg);border:none;border-radius:var(--r);width:38px;height:38px;font-size:1.1rem;cursor:pointer}
+.hamburger{display:none;position:fixed;bottom:1.5rem;right:1.5rem;z-index:200;background:var(--accent);
+  color:var(--bg);border:none;border-radius:50%;width:52px;height:52px;font-size:1.3rem;cursor:pointer;
+  box-shadow:0 4px 16px rgba(0,0,0,0.35);
+  padding-bottom:env(safe-area-inset-bottom,0)}
 .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:99}
 @media(max-width:768px){
   .hamburger{display:flex;align-items:center;justify-content:center}
   .sidebar{transform:translateX(-100%)}
   .sidebar.open{transform:translateX(0)}
   .overlay.open{display:block}
-  .main{margin-left:0;padding:1rem;padding-top:3.5rem}
+  .main{margin-left:0;padding:1rem;padding-top:calc(1rem + env(safe-area-inset-top,0px));padding-bottom:calc(5rem + env(safe-area-inset-bottom,0px))}
 }
 
 /* ══ PAGE ══ */
@@ -145,7 +149,8 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:1
 .card-sub{font-size:0.78rem;color:var(--text2);margin-top:-0.6rem;margin-bottom:1rem}
 
 /* ══ STATS ══ */
-.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1rem;margin-bottom:1.25rem}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem;margin-bottom:1.25rem}
+@media(max-width:480px){.stats-grid{grid-template-columns:1fr 1fr}}
 .stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:1.1rem;box-shadow:var(--shadow)}
 .stat-icon{font-size:1.3rem;margin-bottom:0.4rem}
 .stat-label{font-size:0.72rem;color:var(--text2);font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:0.3rem}
@@ -273,6 +278,7 @@ input[readonly]{background:var(--surface3);color:var(--text2);cursor:default}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:1.25rem}
 .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.25rem}
 @media(max-width:900px){.two-col,.three-col{grid-template-columns:1fr}}
+@media(max-width:640px){.two-col{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}.fg.span2,.fg.span3{grid-column:span 1}}
 
 /* ══ ALERT ══ */
 .alert{padding:0.75rem 1rem;border-radius:var(--r);font-size:0.83rem;font-weight:600;margin-bottom:1rem;display:flex;align-items:center;gap:0.5rem}
@@ -311,6 +317,16 @@ input[readonly]{background:var(--surface3);color:var(--text2);cursor:default}
 
 /* ══ SYNC INDICATOR ══ */
 #syncIndicator{transition:color .3s;letter-spacing:.02em}
+
+/* ══ PWA / iPhone safe areas ══ */
+@supports(padding-top: env(safe-area-inset-top)){
+  body { padding-top: env(safe-area-inset-top); }
+}
+/* Cuando está instalada como PWA standalone */
+@media(display-mode: standalone){
+  .main{ padding-top: calc(1rem + env(safe-area-inset-top,20px)); }
+  .sidebar{ padding-top: calc(1.25rem + env(safe-area-inset-top,20px)); }
+}
 
 /* ══ SCANNER ══ */
 .scanner-wrap{position:relative;width:100%;max-width:400px;margin:0 auto;border-radius:var(--r-lg);overflow:hidden;background:#000}
