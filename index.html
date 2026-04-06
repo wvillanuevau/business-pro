@@ -171,12 +171,12 @@ tbody tr:last-child td{border-bottom:none}
 tbody tr:hover td{background:var(--surface2)}
 
 /* ══ FORMS ══ */
-.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:0.75rem;align-items:end}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:0.75rem;align-items:end;width:100%;overflow:hidden}
 .fg{display:flex;flex-direction:column;gap:0.3rem}
 .fg.span2{grid-column:span 2}
 .fg.span3{grid-column:span 3}
 label{font-size:0.72rem;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:0.04em}
-input,select,textarea{padding:0.55rem 0.75rem;border:1px solid var(--border);border-radius:var(--r);font-size:16px!important;
+input,select,textarea{padding:0.55rem 0.75rem;border:1px solid var(--border);border-radius:var(--r);font-size:16px!important;max-width:100%;box-sizing:border-box;
   background:var(--surface2);color:var(--text);font-family:var(--font);font-size:0.88rem;width:100%;transition:border-color .15s}
 input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
 textarea{resize:vertical;min-height:80px}
@@ -376,8 +376,14 @@ const STATE = {
   clientes: [], citas: [], cajas: [], sucursales: [],
   config: {
     nombreNegocio:"NegocioPro", moneda:"$", tema:"dark",
-    porcentajeComision:10, ivaPct:0,
-    sucursalActiva:null, stockMinimo:5
+    porcentajeComision:10, ivaPct:13,
+    sucursalActiva:null, stockMinimo:5,
+    // Datos fiscales El Salvador
+    nit:"", registroIVA:"", direccion:"", telefono:"",
+    prefijoDTE:"RBS", correlativoActual:1,
+    // Preparación DTE (futuro)
+    modoContribuyente:"consumidor_final",
+    paypalEmail:"", paypalNombre:""
   },
   ids:{ u:1, p:1, i:1, g:1, cl:1, ci:1, ca:1, s:1 },
   activeTab:"dashboard", calMes:null
@@ -556,6 +562,15 @@ function applyTheme(t){ document.body.className=t; STATE.config.tema=t; }
 // ════════════════════════════════════════════════════════════
 const $ = id => document.getElementById(id);
 const $$ = sel => document.querySelectorAll(sel);
+// Generar correlativo único para recibos
+function generarCorrelativo(){
+  const num = STATE.config.correlativoActual || 1;
+  STATE.config.correlativoActual = num + 1;
+  const prefijo = STATE.config.prefijoDTE || "RBS";
+  const anio = new Date().getFullYear();
+  return `${prefijo}-${anio}-${String(num).padStart(6,"0")}`;
+}
+
 const fmtMoney = v => !isNaN(v) ? `${STATE.config.moneda}${Number(v).toLocaleString("es",{minimumFractionDigits:2,maximumFractionDigits:2})}` : "—";
 const today = () => new Date().toISOString().slice(0,10);
 const nowTime = () => new Date().toTimeString().slice(0,5);
@@ -711,6 +726,22 @@ async function iniciarScanner(videoId, onResult){
 async function detenerScanner(){
   if(_codeReader){ try{ _codeReader.reset(); }catch(e){} _codeReader=null; }
   _scannerActivo=false;
+}
+
+let _codeReaderCatalogo=null;
+async function iniciarScannerCatalogo(videoId, onResult){
+  if(_codeReaderCatalogo){ try{ _codeReaderCatalogo.reset(); }catch(e){} }
+  if(typeof ZXing==="undefined"){ toast("⚠️ Escáner no disponible","err"); return; }
+  try{
+    _codeReaderCatalogo=new ZXing.BrowserMultiFormatReader();
+    const videoEl=document.getElementById(videoId); if(!videoEl) return;
+    await _codeReaderCatalogo.decodeFromVideoDevice(null,videoId,(result,err)=>{
+      if(result) onResult(result.getText());
+    });
+  }catch(e){ toast("⚠️ Cámara: "+e.message,"err"); }
+}
+async function detenerScannerCatalogo(){
+  if(_codeReaderCatalogo){ try{ _codeReaderCatalogo.reset(); }catch(e){} _codeReaderCatalogo=null; }
 }
 
 // Backup auto cada 10 min
@@ -1467,7 +1498,18 @@ function renderCatalogo(){
       <div class="fg"><label>Stock inicial</label><input id="pStock" type="number" min="0" placeholder="0"></div>
       <div class="fg"><label>Categoría</label><input id="pCat" placeholder="Ej: Cortes, Tintes..."></div>
       <div class="fg span2"><label>Código de barras</label>
-        <div class="barcode-input-wrap"><span>🔍</span><input id="pCodigo" placeholder="Escanea o escribe el código (opcional)"><span class="scan-badge">Escanear</span></div>
+        <div class="barcode-input-wrap">
+          <span>🔍</span>
+          <input id="pCodigo" placeholder="Escanea con lector USB o escribe el código">
+          <button class="btn btn-outline btn-xs" id="btnCamaraCatalogo" type="button">📷</button>
+        </div>
+        <div id="cameraCatalogWrap" style="display:none;margin-top:.5rem">
+          <div class="scanner-wrap" style="max-height:200px">
+            <video id="scannerCatalog" style="width:100%;max-height:200px"></video>
+            <div class="scanner-line"></div>
+          </div>
+          <button class="btn btn-ghost btn-xs" id="btnStopCamaraCatalogo" style="width:100%;margin-top:.25rem">⏹ Detener</button>
+        </div>
       </div>
       <input type="hidden" id="pEditId">
       <div style="display:flex;gap:.5rem;align-items:flex-end">
@@ -1652,32 +1694,61 @@ function renderContabilidad(){
 // ════════════════════════════════════════════════════════════
 //  EMPLEADOS
 // ════════════════════════════════════════════════════════════
-function renderEmpleados(){
+function calcComisionesEmp(empId, desde, hasta){
+  const ventas=STATE.ingresos.filter(i=>{
+    if(i.metodoPago==="ajuste") return false; // excluir ajustes de inventario
+    if(i.empleadoId!==empId) return false;
+    if(desde && i.fecha<desde) return false;
+    if(hasta && i.fecha>hasta) return false;
+    return true;
+  });
+  const total=ventas.reduce((s,i)=>s+i.total,0);
+  const emp=STATE.usuarios.find(u=>u.id===empId);
+  const pct=emp?.comision||0;
+  return {ventas, total, comision:total*(pct/100)};
+}
+
+function renderEmpleados(desde="", hasta=""){
   const filas=STATE.usuarios.map(u=>{
-    const ventas=STATE.ingresos.filter(i=>i.empleadoId===u.id);
-    const totalVentas=ventas.reduce((s,i)=>s+i.total,0);
-    const comisionTotal=totalVentas*(u.comision||0)/100;
+    const {ventas,total,comision}=calcComisionesEmp(u.id,desde,hasta);
+    // Ventas únicas por visita
+    const visitasUnicas=new Set(ventas.map(i=>i.visitaId||("v"+i.id))).size;
     return `<tr>
       <td><strong>${u.nombre||u.username}</strong><br><span style="font-size:.72rem;color:var(--text2)">${u.username}</span></td>
       <td><span class="badge ${u.role==="admin"?"bg-purple":"bg-blue"}">${u.role}</span></td>
       <td class="amt">${u.comision||0}%</td>
-      <td class="amt-blue">${ventas.length}</td>
-      <td class="amt-green">${fmtMoney(totalVentas)}</td>
-      <td class="amt-accent" style="color:var(--accent)">${fmtMoney(comisionTotal)}</td>
-      <td><button class="icon-btn" data-action="editEmp" data-id="${u.id}">✏️</button></td>
+      <td class="amt-blue">${visitasUnicas}</td>
+      <td class="amt-green">${fmtMoney(total)}</td>
+      <td class="amt-accent" style="color:var(--accent);font-weight:800">${fmtMoney(comision)}</td>
+      <td><button class="icon-btn" data-action="editEmp" data-id="${u.id}" title="Editar comisión">✏️</button>
+          <button class="icon-btn" data-action="verEmp" data-id="${u.id}" title="Ver detalle">👁️</button>
+      </td>
     </tr>`;
   }).join("");
 
+  const totalComisiones=STATE.usuarios.reduce((s,u)=>s+calcComisionesEmp(u.id,desde,hasta).comision,0);
+
   return `<div class="page-header"><div class="page-title">◎ Empleados y Comisiones</div></div>
   <div class="card">
-    <div class="card-title">Reporte de comisiones</div>
-    <div class="card-sub">Porcentaje configurado por empleado sobre el total de sus ventas</div>
+    <div class="card-title">Reporte de comisiones individuales</div>
+    <div class="card-sub">Calculado sobre ventas asignadas a cada empleado en el período seleccionado</div>
     <div class="form-grid" style="margin-bottom:1rem">
-      <div class="fg"><label>Desde</label><input id="empDesde" type="date"></div>
-      <div class="fg"><label>Hasta</label><input id="empHasta" type="date" value="${today()}"></div>
+      <div class="fg"><label>Desde</label><input id="empDesde" type="date" value="${desde}"></div>
+      <div class="fg"><label>Hasta</label><input id="empHasta" type="date" value="${hasta||today()}"></div>
+      <div style="display:flex;align-items:flex-end;gap:.5rem">
+        <button class="btn btn-primary btn-sm" id="btnFiltrarEmp">Filtrar</button>
+        <button class="btn btn-ghost btn-sm" id="btnVerTodoEmp">Ver todo</button>
+      </div>
     </div>
-    <div class="table-wrap"><table><thead><tr><th>Empleado</th><th>Rol</th><th>Comisión %</th><th>Ventas</th><th>Total vendido</th><th>Comisión ganada</th><th></th></tr></thead>
-    <tbody>${filas}</tbody></table></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Empleado</th><th>Rol</th><th>Comisión %</th><th>Visitas</th><th>Total vendido</th><th>Comisión a pagar</th><th></th></tr></thead>
+      <tbody>${filas}</tbody>
+      <tfoot><tr style="font-weight:800">
+        <td colspan="5" style="text-align:right;padding:.75rem">Total comisiones a pagar:</td>
+        <td class="amt-accent" style="color:var(--accent);padding:.75rem">${fmtMoney(totalComisiones)}</td>
+        <td></td>
+      </tr></tfoot>
+    </table></div>
   </div>`;
 }
 
@@ -1798,7 +1869,7 @@ function renderConfiguracion(){
       <div class="form-grid">
         <div class="fg span2"><label>Nombre del negocio</label><input id="cfgNombre" value="${STATE.config.nombreNegocio}"></div>
         <div class="fg"><label>Símbolo moneda</label><input id="cfgMoneda" value="${STATE.config.moneda}" maxlength="4"></div>
-        <div class="fg"><label>IVA %</label><input id="cfgIva" type="number" value="${STATE.config.ivaPct||0}" min="0" max="100"></div>
+        <div class="fg"><label>IVA % (El Salvador: 13%)</label><input id="cfgIva" type="number" value="${STATE.config.ivaPct||13}" min="0" max="100"></div>
         <div class="fg"><label>Comisión default %</label><input id="cfgComision" type="number" value="${STATE.config.porcentajeComision||0}" min="0" max="100"></div>
         <div class="fg"><label>Stock mínimo alerta</label><input id="cfgStockMin" type="number" value="${STATE.config.stockMinimo||5}" min="0"></div>
         <div class="fg span2"><label>Tema</label>
@@ -1806,6 +1877,33 @@ function renderConfiguracion(){
         </div>
         <div style="display:flex;align-items:flex-end"><button class="btn btn-primary" id="btnGuardarCfg">Guardar</button></div>
       </div>
+    </div>
+    <div class="card"><div class="card-title">🏛️ Datos Fiscales — El Salvador</div>
+      <div class="card-sub">Estos datos aparecen en todos los comprobantes. Requeridos para futura integración DTE.</div>
+      <div class="form-grid">
+        <div class="fg span2"><label>NIT (Número de Identificación Tributaria)</label>
+          <input id="cfgNit" placeholder="0000-000000-000-0" value="${STATE.config.nit||''}"></div>
+        <div class="fg span2"><label>Registro IVA / Número de Registro Fiscal</label>
+          <input id="cfgIvaReg" placeholder="000000-0" value="${STATE.config.registroIVA||''}"></div>
+        <div class="fg span2"><label>Dirección del negocio</label>
+          <input id="cfgDireccion" placeholder="Dirección completa" value="${STATE.config.direccion||''}"></div>
+        <div class="fg"><label>Teléfono</label>
+          <input id="cfgTelefono" placeholder="0000-0000" value="${STATE.config.telefono||''}"></div>
+        <div class="fg"><label>Prefijo correlativo</label>
+          <input id="cfgPrefijo" placeholder="RBS" maxlength="6" value="${STATE.config.prefijoDTE||'RBS'}"></div>
+        <div class="fg"><label>Correlativo actual</label>
+          <input id="cfgCorrelativo" type="number" min="1" value="${STATE.config.correlativoActual||1}"></div>
+        <div class="fg span2"><label>Modo de contribuyente</label>
+          <select id="cfgModoContrib">
+            <option value="consumidor_final" ${(STATE.config.modoContribuyente||"consumidor_final")==="consumidor_final"?"selected":""}>Consumidor Final (facturas sin crédito fiscal)</option>
+            <option value="credito_fiscal" ${STATE.config.modoContribuyente==="credito_fiscal"?"selected":""}>Crédito Fiscal (CCF — entre contribuyentes)</option>
+          </select>
+        </div>
+      </div>
+      <div class="alert alert-warning" style="margin-top:.75rem">
+        ⚠️ <strong>Importante:</strong> Los comprobantes generados son de uso interno. Para emitir Documentos Tributarios Electrónicos (DTE) válidos ante el Ministerio de Hacienda de El Salvador, se requiere registro oficial y firma digital. Consulta a un contador.
+      </div>
+      <button class="btn btn-primary btn-sm" id="btnGuardarFiscal" style="margin-top:.75rem">Guardar datos fiscales</button>
     </div>
     <div class="card"><div class="card-title">💳 Cobro en línea — PayPal</div>
       <div class="card-sub">Los clientes podrán pagar desde su celular vía PayPal</div>
@@ -1901,33 +1999,55 @@ function showTicketVisita(visitaId){
   if(!items.length) return;
   const ref=items[0];
   const cli=STATE.clientes.find(c=>c.id===ref.clienteId);
-  const emp=STATE.usuarios.find(u=>u.id===ref.empleadoId);
+  // FIX: usar el empleadoId real de la visita (guardado en ref), no el usuario activo
+  const empId = ref.empleadoId;
+  const emp=STATE.usuarios.find(u=>u.id===empId);
+  const totalBruto=items.reduce((s,i)=>s+i.precioUnitario*i.cantidad-(i.descuento||0),0);
+  const ivaAmt=totalBruto*(STATE.config.ivaPct||0)/100;
   const totalVisita=items.reduce((s,i)=>s+i.total,0);
+  // Usar correlativo guardado en la visita, o generar referencia
+  const correlativo=ref.correlativo||`${STATE.config.prefijoDTE||"RBS"}-${ref.fecha?.replace(/-/g,"")}-${String(ref.id).padStart(4,"0")}`;
+  const suc=STATE.sucursales.find(s=>s.id===STATE.config.sucursalActiva);
+
   const lineas=items.map(i=>{
     const p=STATE.productos.find(pr=>pr.id===i.productoId);
-    return `<div class="ticket-row"><span>${p?.nombre||"?"}</span></div>
-    <div class="ticket-row" style="color:#555"><span>${i.cantidad} x ${fmtMoney(i.precioUnitario)}</span><span>${fmtMoney(i.precioUnitario*i.cantidad)}</span></div>
-    ${i.descuento>0?`<div class="ticket-row" style="color:#c00"><span>  Descuento</span><span>-${fmtMoney(i.descuento)}</span></div>`:""}`;
+    const sub=i.precioUnitario*i.cantidad;
+    return `<div class="ticket-row"><span>${p?.nombre||"?"}</span><span class="amt">${fmtMoney(sub)}</span></div>
+    <div class="ticket-row" style="font-size:.7rem;color:#777"><span>  ${i.cantidad} × ${fmtMoney(i.precioUnitario)}</span></div>
+    ${i.descuento>0?`<div class="ticket-row" style="font-size:.72rem;color:#c00"><span>  Descuento</span><span>-${fmtMoney(i.descuento)}</span></div>`:""}`;
   }).join("");
+
   const html=`<div class="modal-bg" id="modalTicket">
-    <div class="modal" style="max-width:380px">
-      <div class="modal-header"><div class="modal-title">🧾 Recibo de Venta</div><button class="modal-close" id="btnCerrarTicket">✕</button></div>
+    <div class="modal" style="max-width:400px">
+      <div class="modal-header"><div class="modal-title">🧾 Comprobante de Venta</div><button class="modal-close" id="btnCerrarTicket">✕</button></div>
       <div class="ticket">
         <div class="ticket-header">
-          <div style="font-size:1rem;font-weight:700">${STATE.config.nombreNegocio}</div>
-          <div>${STATE.sucursales.find(s=>s.id===STATE.config.sucursalActiva)?.nombre||""}</div>
-          <div style="margin-top:.5rem">${ref.fecha} ${ref.hora||""}</div>
-          <div>Visita #${String(visitaId).slice(-6)}</div>
+          <div style="font-size:1.05rem;font-weight:700;text-transform:uppercase">${STATE.config.nombreNegocio}</div>
+          ${STATE.config.direccion?`<div style="font-size:.72rem">${STATE.config.direccion}</div>`:""}
+          ${STATE.config.telefono?`<div style="font-size:.72rem">Tel: ${STATE.config.telefono}</div>`:""}
+          ${STATE.config.nit?`<div style="font-size:.72rem">NIT: ${STATE.config.nit}</div>`:""}
+          ${STATE.config.registroIVA?`<div style="font-size:.72rem">Reg. IVA: ${STATE.config.registroIVA}</div>`:""}
+          <div style="font-size:.72rem">${suc?.nombre||""}</div>
+          <div style="margin-top:.4rem;border-top:1px dashed #ccc;padding-top:.4rem">
+            <div style="font-size:.72rem">No. Correlativo: <strong>${correlativo}</strong></div>
+            <div style="font-size:.72rem">${ref.fecha} ${ref.hora||""}</div>
+          </div>
         </div>
-        ${cli?`<div class="ticket-row"><span>Cliente:</span><span>${cli.nombre}</span></div>`:""}
-        ${emp?`<div class="ticket-row"><span>Atendido por:</span><span>${emp.nombre||emp.username}</span></div>`:""}
+        ${cli?`<div class="ticket-row"><span>Cliente:</span><span>${cli.nombre}</span></div>`:"<div class='ticket-row'><span>Cliente:</span><span>Consumidor Final</span></div>"}
+        ${emp?`<div class="ticket-row"><span>Atendió:</span><span>${emp.nombre||emp.username}</span></div>`:""}
         <div style="margin:.5rem 0;border-top:1px dashed #ccc;border-bottom:1px dashed #ccc;padding:.5rem 0">
           ${lineas}
         </div>
+        ${ivaAmt>0?`
+        <div class="ticket-row" style="font-size:.78rem;color:#555"><span>Subtotal (sin IVA)</span><span>${fmtMoney(totalBruto-ivaAmt)}</span></div>
+        <div class="ticket-row" style="font-size:.78rem;color:#555"><span>IVA (${STATE.config.ivaPct}%)</span><span>${fmtMoney(ivaAmt)}</span></div>`:""}
         <div class="ticket-total ticket-row"><span>TOTAL</span><span>${fmtMoney(totalVisita)}</span></div>
-        <div class="ticket-row"><span>Método:</span><span>${ref.metodoPago||"efectivo"}</span></div>
-        ${ref.notas?`<div style="margin-top:.5rem;font-size:.7rem;color:#666">Nota: ${ref.notas}</div>`:""}
-        <div class="ticket-footer">¡Gracias por su preferencia!</div>
+        <div class="ticket-row"><span>Método de pago:</span><span>${ref.metodoPago||"efectivo"}</span></div>
+        ${ref.notas?`<div style="margin-top:.4rem;font-size:.7rem;color:#666">Nota: ${ref.notas}</div>`:""}
+        <div class="ticket-footer">
+          ¡Gracias por su preferencia!<br>
+          <span style="font-size:.65rem;color:#999">Comprobante interno de control — No válido como Documento Tributario Electrónico (DTE)</span>
+        </div>
       </div>
       <div style="display:flex;gap:.5rem;margin-top:1rem;justify-content:center;flex-wrap:wrap" class="no-print">
         <button class="btn btn-primary btn-sm" onclick="window.print()">🖨️ Imprimir</button>
@@ -2136,18 +2256,21 @@ function attachVentasEvents(){
     const fecha=today(), hora=nowTime();
     // ID de visita compartido para todos los ítems de esta transacción
     const visitaId="V"+Date.now();
+    const correlativo=generarCorrelativo();
+    saveAll(); // guardar correlativo actualizado
     const nuevosIds=[];
+    const empId=emp?parseInt(emp):null;
     STATE._items.forEach(it=>{
       const sub=it.precio*it.cant-(it.desc||0);
       const iva=sub*(STATE.config.ivaPct||0)/100;
       const total=sub+iva;
       const ing={
-        id:uid("i"), visitaId, fecha, hora,
+        id:uid("i"), visitaId, correlativo, fecha, hora,
         productoId:it.prodId, cantidad:it.cant,
         precioUnitario:it.precio, descuento:it.desc||0, total,
         metodoPago:metodo,
         clienteId:cli?parseInt(cli):null,
-        empleadoId:emp?parseInt(emp):null,
+        empleadoId:empId, // FIX: usar empId fijo para toda la visita
         cajaId:caja?.id||null, notas
       };
       STATE.ingresos.push(ing);
@@ -2374,6 +2497,13 @@ function attachRecordatoriosEvents(){
 
   // Gestión de plantillas
   const modalP=$("modalPlantilla");
+  $("btnLimpiarHistorial")?.addEventListener("click",()=>{
+    if(confirm2("¿Limpiar todo el historial de mensajes?")){
+      localStorage.removeItem("np_historial_wa");
+      toast("🗑️ Historial limpiado","ok");
+      goTab("whatsapp");
+    }
+  });
   $("btnNuevaPlantilla")?.addEventListener("click",()=>{
     $("modalPlantillaTitulo").textContent="Nueva Plantilla";
     $("pNombrePlantilla").value=""; $("pTextoPlantilla").value=""; $("pEditIdxPlantilla").value="";
@@ -2458,13 +2588,36 @@ function attachCatalogoEvents(){
     showForm(); $("formProd").scrollIntoView({behavior:"smooth"});
   }));
 
-  // Escáner de cámara para asignar código al producto
+  // Escáner USB para catálogo
   const pCodigoEl=$("pCodigo");
   if(pCodigoEl){
     pCodigoEl.addEventListener("keydown",e=>{
-      if(e.key==="Enter"){ e.preventDefault(); toast("✅ Código registrado: "+pCodigoEl.value,"ok",1200); }
+      if(e.key==="Enter"){ e.preventDefault(); toast("✅ Código: "+pCodigoEl.value,"ok",1200); }
     });
   }
+  // Cámara para catálogo
+  $("btnCamaraCatalogo")?.addEventListener("click",async()=>{
+    const wrap=$("cameraCatalogWrap");
+    if(!wrap) return;
+    if(wrap.style.display==="none"){
+      wrap.style.display="block";
+      let scanned=false;
+      await iniciarScannerCatalogo("scannerCatalog", codigo=>{
+        if(scanned) return; scanned=true;
+        if(pCodigoEl) pCodigoEl.value=codigo;
+        toast("✅ Código escaneado: "+codigo,"ok",1500);
+        wrap.style.display="none";
+        detenerScannerCatalogo();
+      });
+    } else {
+      wrap.style.display="none";
+      detenerScannerCatalogo();
+    }
+  });
+  $("btnStopCamaraCatalogo")?.addEventListener("click",()=>{
+    $("cameraCatalogWrap").style.display="none";
+    detenerScannerCatalogo();
+  });
 
   $$("[data-action='delProd']").forEach(b=>b.addEventListener("click",()=>{
     const id=parseInt(b.dataset.id);
@@ -2627,12 +2780,48 @@ function attachReportesEvents(){
 
 // ── EMPLEADOS ──
 function attachEmpleadosEvents(){
+  $("btnFiltrarEmp")?.addEventListener("click",()=>{
+    const desde=$("empDesde")?.value||"";
+    const hasta=$("empHasta")?.value||"";
+    $("mainContent").innerHTML=renderEmpleados(desde,hasta);
+    attachEmpleadosEvents();
+  });
+  $("btnVerTodoEmp")?.addEventListener("click",()=>{
+    $("mainContent").innerHTML=renderEmpleados("","");
+    attachEmpleadosEvents();
+  });
   $$("[data-action='editEmp']").forEach(b=>b.addEventListener("click",()=>{
     const u=STATE.usuarios.find(x=>x.id===parseInt(b.dataset.id));
     if(!u) return;
     const pct=prompt(`Comisión % para ${u.nombre||u.username}:`,u.comision||0);
     if(pct===null) return;
     u.comision=parseFloat(pct)||0; saveAll(); toast("✅ Comisión actualizada","ok"); goTab("empleados");
+  }));
+  $$("[data-action='verEmp']").forEach(b=>b.addEventListener("click",()=>{
+    const u=STATE.usuarios.find(x=>x.id===parseInt(b.dataset.id));
+    if(!u) return;
+    const desde=$("empDesde")?.value||"";
+    const hasta=$("empHasta")?.value||"";
+    const {ventas,total,comision}=calcComisionesEmp(u.id,desde,hasta);
+    const filas=ventas.sort((a,b2)=>b2.fecha.localeCompare(a.fecha)).slice(0,30).map(i=>{
+      const p=STATE.productos.find(pr=>pr.id===i.productoId);
+      const com=i.total*((u.comision||0)/100);
+      return `<tr><td>${i.fecha} ${i.hora||""}</td><td>${i.correlativo||"—"}</td><td>${p?.nombre||"?"}</td><td class="amt-green">${fmtMoney(i.total)}</td><td class="amt-accent">${fmtMoney(com)}</td></tr>`;
+    }).join("")||`<tr><td colspan="5" style="text-align:center;padding:1rem;color:var(--text2)">Sin ventas en este período</td></tr>`;
+    const html=`<div class="modal-bg" id="modalEmp">
+      <div class="modal" style="max-width:600px">
+        <div class="modal-header"><div class="modal-title">👤 ${u.nombre||u.username} — Detalle de comisiones</div><button class="modal-close" id="btnCerrarEmp">✕</button></div>
+        <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:1rem">
+          <div><div style="font-size:.72rem;color:var(--text2)">Comisión %</div><strong>${u.comision||0}%</strong></div>
+          <div><div style="font-size:.72rem;color:var(--text2)">Total vendido</div><strong class="c-green">${fmtMoney(total)}</strong></div>
+          <div><div style="font-size:.72rem;color:var(--text2)">A pagar</div><strong style="color:var(--accent)">${fmtMoney(comision)}</strong></div>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Correlativo</th><th>Producto</th><th>Total</th><th>Comisión</th></tr></thead><tbody>${filas}</tbody></table></div>
+      </div>
+    </div>`;
+    document.body.insertAdjacentHTML("beforeend",html);
+    $("modalEmp")?.addEventListener("click",e=>{ if(e.target.id==="modalEmp") $("modalEmp").remove(); });
+    $("btnCerrarEmp")?.addEventListener("click",()=>$("modalEmp").remove());
   }));
 }
 
@@ -2709,11 +2898,21 @@ function attachConfigEvents(){
   $("btnGuardarCfg")?.addEventListener("click",()=>{
     STATE.config.nombreNegocio=$("cfgNombre")?.value.trim()||"NegocioPro";
     STATE.config.moneda=$("cfgMoneda")?.value.trim()||"$";
-    STATE.config.ivaPct=parseFloat($("cfgIva")?.value)||0;
+    STATE.config.ivaPct=parseFloat($("cfgIva")?.value)||13;
     STATE.config.porcentajeComision=parseFloat($("cfgComision")?.value)||0;
     STATE.config.stockMinimo=parseInt($("cfgStockMin")?.value)||5;
     STATE.config.tema=$("cfgTema")?.value||"dark";
     saveAll(); applyTheme(STATE.config.tema); toast("✅ Configuración guardada","ok"); renderApp();
+  });
+  $("btnGuardarFiscal")?.addEventListener("click",()=>{
+    STATE.config.nit=$("cfgNit")?.value.trim()||"";
+    STATE.config.registroIVA=$("cfgIvaReg")?.value.trim()||"";
+    STATE.config.direccion=$("cfgDireccion")?.value.trim()||"";
+    STATE.config.telefono=$("cfgTelefono")?.value.trim()||"";
+    STATE.config.prefijoDTE=$("cfgPrefijo")?.value.trim()||"RBS";
+    STATE.config.correlativoActual=parseInt($("cfgCorrelativo")?.value)||1;
+    STATE.config.modoContribuyente=$("cfgModoContrib")?.value||"consumidor_final";
+    saveAll(); toast("✅ Datos fiscales guardados","ok");
   });
   // Botones de exportar/importar en config
   $("btnExportJSON2")?.addEventListener("click",()=>{
