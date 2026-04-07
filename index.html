@@ -324,6 +324,18 @@ input[readonly]{background:var(--surface3);color:var(--text2);cursor:default}
 /* ══ SYNC INDICATOR ══ */
 #syncIndicator{transition:color .3s;letter-spacing:.02em}
 
+/* ══ PILL TABS (SA panel) ══ */
+.pill-tabs{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1.25rem;
+  padding:.5rem;background:var(--surface);border-radius:var(--r);border:1px solid var(--border)}
+.pill-tab{padding:.45rem 1.1rem;border-radius:var(--r);border:none;cursor:pointer;
+  font-size:.83rem;font-weight:600;background:transparent;color:var(--text2);
+  font-family:var(--font);transition:all .2s}
+.pill-tab:hover{background:var(--surface2);color:var(--text)}
+.pill-tab.active{background:var(--accent);color:var(--bg)}
+/* Alert warning */
+.alert-warning{background:rgba(232,160,32,0.12);border:1px solid rgba(232,160,32,0.3);
+  border-radius:var(--r);padding:.75rem 1rem;font-size:.83rem;color:var(--text)}
+
 /* ══ PWA / iPhone safe areas ══ */
 @supports(padding-top: env(safe-area-inset-top)){
   body { padding-top: env(safe-area-inset-top); }
@@ -638,9 +650,7 @@ async function cargarEmpresaPorCodigo(codigo){
 // Inicializar empresa nueva en Firebase con datos por defecto
 async function inicializarEmpresaEnFirebase(empresa){
   const empId = empresa.id;
-  // Guardar directorio
   await fbSaveEmpresa(empresa);
-  // Crear admin de la empresa
   const adminEmp = [{
     id:1, username:"admin", password:"admin123",
     role:"Administrador", nombre:"Administrador",
@@ -652,6 +662,9 @@ async function inicializarEmpresaEnFirebase(empresa){
     ids:{u:2,p:1,i:1,g:1,cl:1,ci:1,ca:1,s:1},
     ts:new Date().toISOString()
   }, empId);
+  // Guardar tier por defecto del admin
+  const tierUsuarios={1:"admin"};
+  await FB.set("_tierUsuarios",{datos:tierUsuarios}, empId);
 }
 
 // Config por defecto para nuevas empresas
@@ -1381,109 +1394,312 @@ function attachLoginEvents(){
 // ════════════════════════════════════════════════════════════
 function buildSuperAdminPanel(){
   return `
-  <div style="min-height:100vh;background:var(--bg);padding:2rem;font-family:var(--font)">
-    <div style="max-width:1100px;margin:0 auto">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2rem;flex-wrap:wrap;gap:1rem">
+  <div style="min-height:100vh;background:var(--bg);padding:1.5rem;font-family:var(--font)">
+    <div style="max-width:1200px;margin:0 auto">
+
+      <!-- Header SA -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;flex-wrap:wrap;gap:1rem">
         <div>
           <div style="font-family:var(--font-display);font-size:1.8rem;font-weight:800;color:var(--accent)">⬡ NegocioPro</div>
-          <div style="font-size:.82rem;color:var(--text2)">Panel de Super Administración</div>
+          <div style="font-size:.82rem;color:var(--text2)">Panel Super Admin</div>
         </div>
-        <div style="display:flex;gap:.5rem;align-items:center">
+        <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
           <button class="btn btn-ghost btn-sm" id="btnSATheme">◑ Tema</button>
-          <button class="btn btn-danger btn-sm" id="btnSALogout">Cerrar sesión SA</button>
+          <button class="btn btn-outline btn-sm" id="btnSAPrecios">💰 Configurar Precios</button>
+          <button class="btn btn-danger btn-sm" id="btnSALogout">Salir</button>
         </div>
       </div>
 
       <!-- Stats -->
-      <div class="stats-grid" style="margin-bottom:1.5rem" id="saStats">
+      <div class="stats-grid" style="margin-bottom:1.5rem">
         <div class="stat"><div class="stat-icon">🏢</div><div class="stat-label">Empresas activas</div><div class="stat-value c-accent" id="saNumEmpresas">...</div></div>
-        <div class="stat"><div class="stat-icon">👥</div><div class="stat-label">Total usuarios</div><div class="stat-value c-blue" id="saNumUsuarios">...</div></div>
-        <div class="stat"><div class="stat-icon">☁️</div><div class="stat-label">Firebase</div><div class="stat-value c-green" id="saFirebaseStatus">OK</div></div>
+        <div class="stat"><div class="stat-icon">👥</div><div class="stat-label">Usuarios totales</div><div class="stat-value c-blue" id="saNumUsuarios">...</div></div>
+        <div class="stat"><div class="stat-icon">💵</div><div class="stat-label">Facturación est. mensual</div><div class="stat-value c-green" id="saFacturacionTotal">...</div></div>
+        <div class="stat"><div class="stat-icon">⚠️</div><div class="stat-label">Empresas sobre límite</div><div class="stat-value c-red" id="saSobreLimite">...</div></div>
       </div>
 
-      <!-- Crear empresa -->
-      <div class="card" style="margin-bottom:1.5rem">
-        <div class="card-title">🏢 Nueva Empresa</div>
-        <div class="form-grid">
-          <div class="fg span2"><label>Nombre de la empresa *</label><input id="saEmpNombre" placeholder="Ej: Salon Elegance, Ferretería Díaz..."></div>
-          <div class="fg"><label>Código de acceso *</label>
-            <div style="display:flex;gap:.5rem">
-              <input id="saEmpCodigo" placeholder="SALON01" style="text-transform:uppercase;letter-spacing:.1em;font-weight:700">
-              <button class="btn btn-ghost btn-sm" id="btnGenerarCodigo" style="white-space:nowrap">🎲 Auto</button>
-            </div>
-          </div>
-          <div class="fg"><label>Email del admin</label><input id="saEmpEmail" type="email" placeholder="admin@empresa.com"></div>
-          <div class="fg"><label>Tipo de negocio</label>
-            <select id="saEmpTipo">
-              <option value="barberia">💈 Barbería / Salón</option>
-              <option value="restaurante">🍽️ Restaurante / Cafetería</option>
-              <option value="tienda">🛒 Tienda / Retail</option>
-              <option value="servicios">🔧 Servicios Generales</option>
-              <option value="farmacia">💊 Farmacia</option>
-              <option value="gym">🏋️ Gimnasio / Fitness</option>
-              <option value="veterinaria">🐾 Veterinaria</option>
-              <option value="otro">📋 Otro</option>
-            </select>
-          </div>
-          <div class="fg"><label>Moneda</label>
-            <select id="saEmpMoneda">
-              <option value="$">$ Dólar (USD)</option>
-              <option value="Q">Q Quetzal (GTQ)</option>
-              <option value="C$">C$ Córdoba (NIO)</option>
-              <option value="L">L Lempira (HNL)</option>
-              <option value="₡">₡ Colón (CRC)</option>
-              <option value="B/.">B/. Balboa (PAB)</option>
-              <option value="€">€ Euro</option>
-              <option value="otro">Otra</option>
-            </select>
-          </div>
-          <div class="fg"><label>País</label>
-            <select id="saEmpPais">
-              <option value="SV">🇸🇻 El Salvador</option>
-              <option value="GT">🇬🇹 Guatemala</option>
-              <option value="HN">🇭🇳 Honduras</option>
-              <option value="NI">🇳🇮 Nicaragua</option>
-              <option value="CR">🇨🇷 Costa Rica</option>
-              <option value="PA">🇵🇦 Panamá</option>
-              <option value="MX">🇲🇽 México</option>
-              <option value="otro">Otro</option>
-            </select>
-          </div>
-          <div class="fg"><label>Plan</label>
-            <select id="saEmpPlan">
-              <option value="basico">🟢 Básico (Ventas, Caja, Clientes)</option>
-              <option value="estandar">🟡 Estándar (+ Inventario, Gastos, Agenda)</option>
-              <option value="completo">🟠 Completo (todos los módulos)</option>
-              <option value="personalizado">🔵 Personalizado</option>
-            </select>
-          </div>
-          <div class="fg"><label>Estado</label>
-            <select id="saEmpEstado">
-              <option value="activo">✅ Activo</option>
-              <option value="prueba">🔄 Período de prueba</option>
-              <option value="suspendido">⛔ Suspendido</option>
-            </select>
-          </div>
-          <div class="fg span2"><label>Notas internas</label><input id="saEmpNotas" placeholder="Observaciones, contacto, fecha de pago..."></div>
-          <div style="display:flex;align-items:flex-end">
-            <button class="btn btn-primary" id="btnCrearEmpresa">🏢 Crear empresa</button>
-          </div>
-        </div>
+      <!-- Tabs SA -->
+      <div class="pill-tabs" id="saTabsBar">
+        <button class="pill-tab active" data-satab="empresas">🏢 Empresas</button>
+        <button class="pill-tab" data-satab="facturacion">💰 Facturación</button>
+        <button class="pill-tab" data-satab="precios">⚙️ Precios y Planes</button>
       </div>
 
-      <!-- Lista de empresas -->
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">
-          <div class="card-title" style="margin:0">📋 Empresas registradas</div>
-          <button class="btn btn-ghost btn-sm" id="btnRefreshEmpresas">🔄 Actualizar</button>
+      <div id="saTabContent"></div>
+    </div>
+  </div>`;
+}
+
+// ── Construir contenido de cada tab SA ──
+function buildSATab(tab, empresas, pricing){
+  if(tab==="empresas")   return buildSATabEmpresas(empresas, pricing);
+  if(tab==="facturacion") return buildSATabFacturacion(empresas, pricing);
+  if(tab==="precios")    return buildSATabPrecios(pricing);
+  return "";
+}
+
+function buildSATabEmpresas(empresas, pricing){
+  const TODOS_PLANES = Object.keys(pricing.planes||{});
+  const optsPlanes = TODOS_PLANES.map(k=>`<option value="${k}">${pricing.planes[k].nombre} — $${pricing.planes[k].precio}/mes</option>`).join("");
+
+  return `
+  <div class="card" style="margin-bottom:1.5rem">
+    <div class="card-title">🏢 Nueva Empresa</div>
+    <div class="form-grid">
+      <div class="fg span2"><label>Nombre *</label><input id="saEmpNombre" placeholder="Ej: Salon Elegance..."></div>
+      <div class="fg"><label>Código de acceso *</label>
+        <div style="display:flex;gap:.5rem">
+          <input id="saEmpCodigo" placeholder="SALON01" style="text-transform:uppercase;letter-spacing:.1em;font-weight:700">
+          <button class="btn btn-ghost btn-sm" id="btnGenerarCodigo">🎲</button>
         </div>
-        <div id="saListaEmpresas">
-          <div class="empty"><div class="empty-icon">🔄</div><p>Cargando empresas...</p></div>
+      </div>
+      <div class="fg"><label>Email del admin</label><input id="saEmpEmail" type="email" placeholder="admin@empresa.com"></div>
+      <div class="fg"><label>Tipo de negocio</label>
+        <select id="saEmpTipo">
+          <option value="barberia">💈 Barbería / Salón</option>
+          <option value="restaurante">🍽️ Restaurante</option>
+          <option value="tienda">🛒 Tienda / Retail</option>
+          <option value="servicios">🔧 Servicios</option>
+          <option value="farmacia">💊 Farmacia</option>
+          <option value="gym">🏋️ Gimnasio</option>
+          <option value="veterinaria">🐾 Veterinaria</option>
+          <option value="otro">📋 Otro</option>
+        </select>
+      </div>
+      <div class="fg"><label>Moneda</label>
+        <select id="saEmpMoneda">
+          <option value="$">$ Dólar</option><option value="Q">Q Quetzal</option>
+          <option value="C$">C$ Córdoba</option><option value="L">L Lempira</option>
+          <option value="₡">₡ Colón</option><option value="€">€ Euro</option>
+        </select>
+      </div>
+      <div class="fg"><label>País</label>
+        <select id="saEmpPais">
+          <option value="SV">🇸🇻 El Salvador</option><option value="GT">🇬🇹 Guatemala</option>
+          <option value="HN">🇭🇳 Honduras</option><option value="NI">🇳🇮 Nicaragua</option>
+          <option value="CR">🇨🇷 Costa Rica</option><option value="PA">🇵🇦 Panamá</option>
+          <option value="MX">🇲🇽 México</option><option value="otro">Otro</option>
+        </select>
+      </div>
+      <div class="fg"><label>Plan</label><select id="saEmpPlan">${optsPlanes}</select></div>
+      <div class="fg"><label>Descuento especial %</label><input id="saEmpDescuento" type="number" value="0" min="0" max="100" placeholder="0"></div>
+      <div class="fg"><label>Estado</label>
+        <select id="saEmpEstado">
+          <option value="activo">✅ Activo</option>
+          <option value="prueba">🔄 Período de prueba</option>
+          <option value="suspendido">⛔ Suspendido</option>
+        </select>
+      </div>
+      <div class="fg"><label>Vence el (opcional)</label><input id="saEmpVence" type="date"></div>
+      <div class="fg span2"><label>Notas</label><input id="saEmpNotas" placeholder="Contacto, fecha de pago, observaciones..."></div>
+      <div style="display:flex;align-items:flex-end"><button class="btn btn-primary" id="btnCrearEmpresa">🏢 Crear empresa</button></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">
+      <div class="card-title" style="margin:0">📋 Empresas registradas (${empresas.length})</div>
+      <button class="btn btn-ghost btn-sm" id="btnRefreshEmpresas">🔄 Actualizar</button>
+    </div>
+    <div id="saListaEmpresas">
+      ${buildSAListaEmpresas(empresas, pricing)}
+    </div>
+  </div>`;
+}
+
+function buildSAListaEmpresas(empresas, pricing){
+  if(!empresas.length) return `<div class="empty"><div class="empty-icon">🏢</div><p>Sin empresas. Crea la primera.</p></div>`;
+  const estadoBadge={activo:"bg-green",prueba:"bg-accent",suspendido:"bg-red"};
+  return `<div class="table-wrap"><table>
+    <thead><tr><th>Código</th><th>Empresa</th><th>Plan</th><th>Estado</th><th>Factura est.</th><th>Vence</th><th>Acciones</th></tr></thead>
+    <tbody>
+    ${empresas.map(e=>{
+      const factura = calcularFacturaEmpresa(e, [], pricing);
+      const planInfo = pricing.planes[e.plan];
+      const venceClass = e.fechaVence && e.fechaVence < today() ? "c-red" : "c-green";
+      return `<tr>
+        <td><span style="font-family:var(--mono);font-weight:700;color:var(--accent)">${e.id||"?"}</span></td>
+        <td><strong>${e.nombre||"—"}</strong><br><span style="font-size:.7rem;color:var(--text2)">${e.emailAdmin||""}</span></td>
+        <td><span class="badge bg-${planInfo?.color||"gray"}">${planInfo?.nombre||e.plan||"—"}</span>
+            ${e.descuentoPct?`<span class="badge bg-green" style="margin-left:.2rem">-${e.descuentoPct}%</span>`:""}</td>
+        <td><span class="badge ${estadoBadge[e.estado]||"bg-gray"}">${e.estado||"activo"}</span></td>
+        <td class="amt-green">$${(planInfo?.precio||0).toFixed(2)}/mes</td>
+        <td><span class="${venceClass}" style="font-size:.78rem">${e.fechaVence||"—"}</span></td>
+        <td style="display:flex;gap:.3rem;flex-wrap:wrap">
+          <button class="icon-btn sa-entrar" data-id="${e.id||e._id}" title="Ver empresa">👁️</button>
+          <button class="icon-btn sa-editar" data-id="${e.id||e._id}" title="Editar">✏️</button>
+          <button class="icon-btn sa-suspender" data-id="${e.id||e._id}" data-estado="${e.estado}" title="Estado">
+            ${e.estado==="suspendido"?"✅":"⛔"}
+          </button>
+          <button class="icon-btn sa-del" data-id="${e.id||e._id}" title="Eliminar" style="color:var(--red)">🗑️</button>
+        </td>
+      </tr>`;
+    }).join("")}
+    </tbody>
+  </table></div>`;
+}
+
+function buildSATabFacturacion(empresas, pricing){
+  let totalMensual=0;
+  const filas=empresas.filter(e=>e.estado!=="eliminado").map(e=>{
+    const plan=pricing.planes[e.plan]||{nombre:"?",precio:0};
+    const base=plan.precio||0;
+    const desc=e.descuentoPct||0;
+    const total=base*(1-desc/100);
+    totalMensual+=total;
+    return {e, plan, base, desc, total};
+  });
+
+  return `
+  <div class="stats-grid" style="margin-bottom:1.25rem">
+    <div class="stat"><div class="stat-icon">💵</div><div class="stat-label">Facturación mensual total</div><div class="stat-value c-green">$${totalMensual.toFixed(2)}</div></div>
+    <div class="stat"><div class="stat-icon">📅</div><div class="stat-label">Facturación anual proyectada</div><div class="stat-value c-green">$${(totalMensual*12).toFixed(2)}</div></div>
+    <div class="stat"><div class="stat-icon">🏢</div><div class="stat-label">Empresas facturables</div><div class="stat-value c-blue">${filas.length}</div></div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">
+      <div class="card-title" style="margin:0">📊 Resumen de facturación — ${new Date().toLocaleString("es",{month:"long",year:"numeric"})}</div>
+      <button class="btn btn-outline btn-sm" id="btnExportFacturacion">📤 Exportar CSV</button>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Empresa</th><th>Plan</th><th>Precio base</th><th>Descuento</th><th>Total mes</th><th>Estado pago</th><th>Vence</th><th>Acción</th></tr></thead>
+      <tbody>
+      ${filas.map(({e,plan,base,desc,total})=>`<tr>
+        <td><strong>${e.nombre}</strong><br><span style="font-size:.7rem;color:var(--text2);font-family:var(--mono)">${e.id}</span></td>
+        <td><span class="badge bg-${plan.color||"gray"}">${plan.nombre}</span></td>
+        <td class="amt">$${base.toFixed(2)}</td>
+        <td>${desc>0?`<span class="c-green">-${desc}%</span>`:"—"}</td>
+        <td class="amt-green" style="font-weight:800">$${total.toFixed(2)}</td>
+        <td><span class="badge ${e.pagado?'bg-green':'bg-red'}">${e.pagado?'✅ Pagado':'⏳ Pendiente'}</span></td>
+        <td style="font-size:.78rem;color:${e.fechaVence&&e.fechaVence<today()?'var(--red)':'var(--text2)'}">${e.fechaVence||"—"}</td>
+        <td style="display:flex;gap:.3rem">
+          <button class="icon-btn sa-marcar-pagado" data-id="${e.id}" title="Marcar pagado">✅</button>
+          <button class="icon-btn sa-renovar" data-id="${e.id}" title="Renovar 30 días">🔄</button>
+        </td>
+      </tr>`).join("")}
+      </tbody>
+      <tfoot><tr>
+        <td colspan="4" style="text-align:right;font-weight:800;padding:.75rem">TOTAL MENSUAL:</td>
+        <td class="amt-green" style="font-weight:800;font-size:1.1rem">$${totalMensual.toFixed(2)}</td>
+        <td colspan="3"></td>
+      </tr></tfoot>
+    </table></div>
+  </div>`;
+}
+
+function buildSATabPrecios(pricing){
+  const tierRows = Object.entries(pricing.tiers||{}).map(([k,t])=>`
+    <div class="card" style="border-left:4px solid var(--${t.color||'blue'});margin-bottom:.75rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem;margin-bottom:.5rem">
+        <strong style="font-size:1rem">${t.nombre} — <span class="c-green">$${t.precio}/mes por usuario</span></strong>
+        <button class="icon-btn sa-edit-tier" data-tier="${k}">✏️</button>
+      </div>
+      <div style="font-size:.8rem;color:var(--text2)">${t.descripcion||""}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.5rem">
+        ${(t.modulos||[]).map(m=>`<span class="badge bg-blue" style="font-size:.68rem">${m}</span>`).join("")}
+      </div>
+    </div>
+  `).join("");
+
+  const planRows = Object.entries(pricing.planes||{}).map(([k,p])=>`
+    <div class="card" style="border-left:4px solid var(--${p.color||'blue'});margin-bottom:.75rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem;margin-bottom:.5rem">
+        <div>
+          <strong style="font-size:1rem">${p.nombre}</strong>
+          <span class="badge bg-${p.color||'blue'}" style="margin-left:.5rem">$${p.precio}/mes</span>
+          <span style="font-size:.78rem;color:var(--text2);margin-left:.5rem">${p.descripcion||""}</span>
         </div>
+        <div style="display:flex;gap:.3rem">
+          <button class="icon-btn sa-edit-plan" data-plan="${k}">✏️</button>
+          <button class="icon-btn sa-del-plan" data-plan="${k}" style="color:var(--red)">🗑️</button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;font-size:.8rem;margin-bottom:.5rem">
+        <div><span style="color:var(--text2)">Usuarios incluidos:</span>
+          ${Object.entries(p.usuariosIncluidos||{}).map(([t,n])=>`<span class="badge bg-gray" style="margin-left:.2rem">${n} ${t}</span>`).join("")}
+        </div>
+        <div><span style="color:var(--text2)">Límite usuarios:</span> <strong>${p.limiteUsuarios===9999?"Ilimitado":p.limiteUsuarios}</strong></div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:.3rem">
+        ${(p.modulosDisponibles||[]).map(m=>`<span class="badge bg-green" style="font-size:.65rem">${m}</span>`).join("")}
+      </div>
+    </div>
+  `).join("");
+
+  return `
+  <div class="two-col" style="align-items:start">
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem;flex-wrap:wrap;gap:.5rem">
+        <div class="card-title" style="margin:0">👤 Tiers de usuario</div>
+        <button class="btn btn-outline btn-sm" id="btnNuevoTier">+ Nuevo tier</button>
+      </div>
+      <div id="tiersList">${tierRows}</div>
+    </div>
+    <div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem;flex-wrap:wrap;gap:.5rem">
+        <div class="card-title" style="margin:0">📦 Planes por empresa</div>
+        <button class="btn btn-outline btn-sm" id="btnNuevoPlan">+ Nuevo plan</button>
+      </div>
+      <div id="plansList">${planRows}</div>
+    </div>
+  </div>
+
+  <!-- Modal editar tier -->
+  <div id="modalEditTier" style="display:none" class="modal-bg">
+    <div class="modal" style="max-width:500px">
+      <div class="modal-header"><div class="modal-title" id="modalTierTitle">Editar Tier</div><button class="modal-close" id="cerrarModalTier">✕</button></div>
+      <div class="form-grid">
+        <div class="fg"><label>Nombre</label><input id="tierNombre" placeholder="Básico"></div>
+        <div class="fg"><label>Precio $/mes por usuario</label><input id="tierPrecio" type="number" min="0" step="0.5" placeholder="2"></div>
+        <div class="fg"><label>Color</label>
+          <select id="tierColor"><option value="blue">Azul</option><option value="green">Verde</option><option value="accent">Dorado</option><option value="purple">Morado</option><option value="red">Rojo</option></select>
+        </div>
+        <div class="fg span2"><label>Descripción</label><input id="tierDesc" placeholder="Descripción breve"></div>
+        <div class="fg span2"><label>Módulos permitidos (selecciona todos los que apliquen)</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:.3rem;margin-top:.3rem" id="tierModulosCheck"></div>
+        </div>
+      </div>
+      <input type="hidden" id="tierEditKey">
+      <div style="display:flex;gap:.5rem;margin-top:1rem">
+        <button class="btn btn-primary" id="btnGuardarTier">Guardar tier</button>
+        <button class="btn btn-ghost" id="cerrarModalTier2">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal editar plan -->
+  <div id="modalEditPlan" style="display:none" class="modal-bg">
+    <div class="modal" style="max-width:600px">
+      <div class="modal-header"><div class="modal-title" id="modalPlanTitle">Editar Plan</div><button class="modal-close" id="cerrarModalPlan">✕</button></div>
+      <div class="form-grid">
+        <div class="fg"><label>Nombre del plan</label><input id="planNombre" placeholder="Starter"></div>
+        <div class="fg"><label>Precio base $/mes</label><input id="planPrecio" type="number" min="0" step="1" placeholder="9"></div>
+        <div class="fg"><label>Color</label>
+          <select id="planColor"><option value="green">Verde</option><option value="blue">Azul</option><option value="accent">Dorado</option><option value="purple">Morado</option></select>
+        </div>
+        <div class="fg"><label>Límite de usuarios</label><input id="planLimite" type="number" min="1" placeholder="10" value="10"></div>
+        <div class="fg span2"><label>Descripción</label><input id="planDesc" placeholder="Ideal para..."></div>
+        <div class="fg span2"><label>Usuarios incluidos en precio base</label>
+          <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin-top:.3rem" id="planIncluidos"></div>
+        </div>
+        <div class="fg span2"><label>Módulos disponibles en este plan</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.3rem;margin-top:.3rem" id="planModulosCheck"></div>
+        </div>
+      </div>
+      <input type="hidden" id="planEditKey">
+      <div style="display:flex;gap:.5rem;margin-top:1rem">
+        <button class="btn btn-primary" id="btnGuardarPlan">Guardar plan</button>
+        <button class="btn btn-ghost" id="cerrarModalPlan2">Cancelar</button>
       </div>
     </div>
   </div>`;
 }
+
+// Estado local del SA panel
+let _saPricing = null;
+let _saEmpresas = [];
+let _saTabActual = "empresas";
 
 function attachSuperAdminEvents(){
   $("btnSALogout")?.addEventListener("click",()=>{
@@ -1491,139 +1707,530 @@ function attachSuperAdminEvents(){
     sessionStorage.removeItem("np_sa"); sessionStorage.removeItem("np_session");
     renderApp();
   });
-  $("btnSATheme")?.addEventListener("click",()=>{ applyTheme(STATE.config.tema==="dark"?"light":"dark"); saveAll(); });
+  $("btnSATheme")?.addEventListener("click",()=>{ applyTheme(STATE.config.tema==="dark"?"light":"dark"); });
 
-  // Generar código automático
+  // Tabs SA
+  $$("[data-satab]").forEach(btn=>btn.addEventListener("click",()=>{
+    $$("[data-satab]").forEach(b=>b.classList.remove("active"));
+    btn.classList.add("active");
+    _saTabActual=btn.dataset.satab;
+    renderSATab();
+  }));
+
+  // Cargar datos y renderizar
+  cargarSAPanel();
+}
+
+async function cargarSAPanel(){
+  _saPricing = await loadPricing();
+  _saEmpresas = await fbLoadEmpresas();
+  actualizarSAStats();
+  renderSATab();
+}
+
+function actualizarSAStats(){
+  const activas=_saEmpresas.filter(e=>e.estado==="activo").length;
+  const sobreLimite=_saEmpresas.filter(e=>{
+    const plan=_saPricing?.planes?.[e.plan];
+    return plan && (e.numUsuarios||0) > (plan.limiteUsuarios||9999);
+  }).length;
+  let totalFact=0;
+  _saEmpresas.forEach(e=>{
+    const plan=_saPricing?.planes?.[e.plan];
+    if(plan) totalFact += (plan.precio||0)*(1-(e.descuentoPct||0)/100);
+  });
+  const el=id=>document.getElementById(id);
+  if(el("saNumEmpresas"))   el("saNumEmpresas").textContent=activas;
+  if(el("saNumUsuarios"))   el("saNumUsuarios").textContent=_saEmpresas.reduce((s,e)=>s+(e.numUsuarios||0),0);
+  if(el("saFacturacionTotal")) el("saFacturacionTotal").textContent="$"+totalFact.toFixed(2);
+  if(el("saSobreLimite"))  el("saSobreLimite").textContent=sobreLimite;
+}
+
+function renderSATab(){
+  const container=$("saTabContent"); if(!container) return;
+  container.innerHTML=buildSATab(_saTabActual, _saEmpresas, _saPricing);
+  attachSATabEvents(_saTabActual);
+}
+
+function attachSATabEvents(tab){
+  if(tab==="empresas")    attachSAEmpresasEvents();
+  if(tab==="facturacion") attachSAFacturacionEvents();
+  if(tab==="precios")     attachSAPreciosEvents();
+}
+
+// ── TAB EMPRESAS ──
+function attachSAEmpresasEvents(){
   $("btnGenerarCodigo")?.addEventListener("click",()=>{
     const nombre=$("saEmpNombre")?.value.trim();
     const base=nombre?nombre.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,5):"EMP";
-    const sufijo=Math.floor(Math.random()*900+100);
-    if($("saEmpCodigo")) $("saEmpCodigo").value=base+sufijo;
+    if($("saEmpCodigo")) $("saEmpCodigo").value=base+Math.floor(Math.random()*900+100);
   });
 
-  // Crear empresa
   $("btnCrearEmpresa")?.addEventListener("click",async()=>{
     const nombre=$("saEmpNombre")?.value.trim();
     const codigo=($("saEmpCodigo")?.value||"").toUpperCase().trim();
     const email=$("saEmpEmail")?.value.trim()||"";
-    if(!nombre||!codigo) return toast("⚠️ Nombre y código son requeridos","warn");
-    if(codigo.length<4) return toast("⚠️ El código debe tener al menos 4 caracteres","warn");
-
-    const btn=$("btnCrearEmpresa"); if(btn) btn.disabled=true;
-    toast("⏳ Creando empresa...","ok",2000);
-
-    // Obtener módulos según plan
-    const plan=$("saEmpPlan")?.value||"completo";
-    const modulosPorPlan={
-      basico:["ventas","caja","clientes","reportes"],
-      estandar:["ventas","caja","clientes","catalogo","gastos","agenda","reportes"],
-      completo:["dashboard","ventas","caja","clientes","catalogo","gastos","agenda","whatsapp","contabilidad","empleados","reportes","usuarios","sucursales","configuracion","roles"],
-      personalizado:["ventas","caja","clientes"]
-    };
-
+    if(!nombre||!codigo) return toast("⚠️ Nombre y código requeridos","warn");
+    if(codigo.length<4)  return toast("⚠️ Código mínimo 4 caracteres","warn");
+    const plan=$("saEmpPlan")?.value||"starter";
+    const planInfo=_saPricing?.planes?.[plan]||{};
     const empresa={
       id:codigo, nombre, emailAdmin:email,
       tipo:$("saEmpTipo")?.value||"otro",
       moneda:$("saEmpMoneda")?.value||"$",
       pais:$("saEmpPais")?.value||"SV",
-      plan, modulos:modulosPorPlan[plan]||modulosPorPlan.completo,
+      plan, modulos:planInfo.modulosDisponibles||[],
+      descuentoPct:parseFloat($("saEmpDescuento")?.value)||0,
       estado:$("saEmpEstado")?.value||"activo",
+      fechaVence:$("saEmpVence")?.value||"",
       notas:$("saEmpNotas")?.value||"",
-      fechaCreacion:today(), creadoPor:"superadmin"
+      fechaCreacion:today(), creadoPor:"superadmin",
+      pagado:false, numUsuarios:1
     };
-
+    const btn=$("btnCrearEmpresa"); if(btn) btn.disabled=true;
+    toast("⏳ Creando...","ok",2000);
     try{
       await inicializarEmpresaEnFirebase(empresa);
-      toast(`✅ Empresa "${nombre}" creada con código ${codigo}`,"ok",4000);
-      // Limpiar formulario
-      ["saEmpNombre","saEmpCodigo","saEmpEmail","saEmpNotas"].forEach(id=>{ const el=$(id); if(el) el.value=""; });
-      cargarListaEmpresas();
-    }catch(e){
-      toast(`❌ Error: ${e.message}`,"err",4000);
-    } finally {
-      if(btn) btn.disabled=false;
-    }
+      _saEmpresas.push(empresa);
+      toast(`✅ Empresa "${nombre}" creada — Código: ${codigo}`,"ok",5000);
+      ["saEmpNombre","saEmpCodigo","saEmpEmail","saEmpNotas","saEmpDescuento"].forEach(id=>{const el=$(id);if(el)el.value="";});
+      actualizarSAStats(); renderSATab();
+    }catch(e){ toast(`❌ ${e.message}`,"err",4000); }
+    finally{ if(btn) btn.disabled=false; }
   });
 
-  $("btnRefreshEmpresas")?.addEventListener("click",()=>cargarListaEmpresas());
-  cargarListaEmpresas();
-}
+  $("btnRefreshEmpresas")?.addEventListener("click",async()=>{
+    _saEmpresas=await fbLoadEmpresas(); actualizarSAStats(); renderSATab();
+  });
 
-async function cargarListaEmpresas(){
-  const container=$("saListaEmpresas"); if(!container) return;
-  container.innerHTML=`<div class="empty"><p>🔄 Cargando...</p></div>`;
-  const empresas=await fbLoadEmpresas();
-
-  // Actualizar stats
-  const saNum=$("saNumEmpresas"); if(saNum) saNum.textContent=empresas.length;
-
-  if(!empresas.length){
-    container.innerHTML=`<div class="empty"><div class="empty-icon">🏢</div><p>Sin empresas registradas. Crea la primera.</p></div>`;
-    return;
-  }
-
-  const estadoBadge={activo:"bg-green",prueba:"bg-accent",suspendido:"bg-red"};
-  const planBadge={basico:"bg-gray",estandar:"bg-blue",completo:"bg-green",personalizado:"bg-purple"};
-
-  container.innerHTML=`<div class="table-wrap"><table>
-    <thead><tr><th>Código</th><th>Empresa</th><th>Tipo</th><th>Plan</th><th>País</th><th>Estado</th><th>Creada</th><th>Acciones</th></tr></thead>
-    <tbody>
-    ${empresas.map(e=>`<tr>
-      <td><span style="font-family:var(--mono);font-weight:700;font-size:.9rem;color:var(--accent)">${e.id||e._id||"?"}</span></td>
-      <td><strong>${e.nombre||"—"}</strong>${e.emailAdmin?`<br><span style="font-size:.72rem;color:var(--text2)">${e.emailAdmin}</span>`:""}</td>
-      <td><span style="font-size:.78rem">${e.tipo||"—"}</span></td>
-      <td><span class="badge ${planBadge[e.plan]||"bg-gray"}">${e.plan||"—"}</span></td>
-      <td>${e.pais||"—"}</td>
-      <td><span class="badge ${estadoBadge[e.estado]||"bg-gray"}">${e.estado||"activo"}</span></td>
-      <td style="font-size:.75rem;color:var(--text2)">${e.fechaCreacion||"—"}</td>
-      <td style="display:flex;gap:.3rem;flex-wrap:wrap">
-        <button class="icon-btn sa-entrar" data-id="${e.id||e._id}" title="Entrar como esta empresa">👁️</button>
-        <button class="icon-btn sa-suspender" data-id="${e.id||e._id}" data-estado="${e.estado}" title="Cambiar estado">
-          ${e.estado==="suspendido"?"✅":"⛔"}
-        </button>
-        <button class="icon-btn sa-del" data-id="${e.id||e._id}" title="Eliminar empresa" style="color:var(--red)">🗑️</button>
-      </td>
-    </tr>`).join("")}
-    </tbody>
-  </table></div>`;
-
-  // Eventos de la tabla
   $$(".sa-entrar").forEach(b=>b.addEventListener("click",async()=>{
-    const id=b.dataset.id;
-    const emp=empresas.find(e=>(e.id||e._id)===id);
-    if(!emp) return;
-    STATE.empresaActual={...emp,id};
+    const emp=_saEmpresas.find(e=>(e.id||e._id)===b.dataset.id); if(!emp) return;
+    STATE.empresaActual={...emp,id:b.dataset.id};
     STATE.isSuperAdmin=false;
     sessionStorage.removeItem("np_sa");
     sessionStorage.setItem("np_empresa",JSON.stringify(STATE.empresaActual));
-    // Cargar datos de esa empresa
-    await loadFromFirebase();
-    renderApp();
-    toast(`👁️ Viendo empresa: ${emp.nombre}`,"ok");
+    await loadFromFirebase(); renderApp();
+    toast(`👁️ Viendo: ${emp.nombre}`,"ok");
+  }));
+
+  $$(".sa-editar").forEach(b=>b.addEventListener("click",()=>{
+    const emp=_saEmpresas.find(e=>(e.id||e._id)===b.dataset.id); if(!emp) return;
+    const nuevoPlan=prompt(`Plan actual: ${emp.plan}
+Planes disponibles: ${Object.keys(_saPricing.planes).join(", ")}
+Nuevo plan:`,emp.plan);
+    if(!nuevoPlan||!_saPricing.planes[nuevoPlan]) return toast("⚠️ Plan no válido","warn");
+    const nuevoDesc=parseFloat(prompt("Descuento especial % (0 = sin descuento):",emp.descuentoPct||0))||0;
+    const nuevaFecha=prompt("Fecha de vencimiento (YYYY-MM-DD, dejar vacío para sin límite):",emp.fechaVence||"");
+    emp.plan=nuevoPlan; emp.descuentoPct=nuevoDesc; emp.fechaVence=nuevaFecha||"";
+    emp.modulos=_saPricing.planes[nuevoPlan].modulosDisponibles||[];
+    FB.setSA("empresa_"+b.dataset.id, emp);
+    toast("✅ Empresa actualizada","ok"); renderSATab();
   }));
 
   $$(".sa-suspender").forEach(b=>b.addEventListener("click",async()=>{
-    const id=b.dataset.id;
-    const emp=empresas.find(e=>(e.id||e._id)===id);
-    if(!emp) return;
+    const emp=_saEmpresas.find(e=>(e.id||e._id)===b.dataset.id); if(!emp) return;
     const nuevoEstado=emp.estado==="suspendido"?"activo":"suspendido";
-    if(!confirm2(`¿Cambiar estado de "${emp.nombre}" a ${nuevoEstado}?`)) return;
-    await FB.setSA("empresa_"+id,{...emp,estado:nuevoEstado});
-    toast(`✅ Estado actualizado: ${nuevoEstado}`,"ok");
-    cargarListaEmpresas();
+    if(!confirm2(`¿Cambiar "${emp.nombre}" a ${nuevoEstado}?`)) return;
+    emp.estado=nuevoEstado;
+    await FB.setSA("empresa_"+b.dataset.id,emp);
+    toast(`✅ ${nuevoEstado}`,"ok"); actualizarSAStats(); renderSATab();
   }));
 
   $$(".sa-del").forEach(b=>b.addEventListener("click",async()=>{
-    const id=b.dataset.id;
-    const emp=empresas.find(e=>(e.id||e._id)===id);
-    if(!emp) return;
-    if(!confirm2(`⚠️ ¿Eliminar PERMANENTEMENTE la empresa "${emp.nombre}" y TODOS sus datos? Esta acción no se puede deshacer.`)) return;
-    if(!confirm2(`Confirma una vez más: ¿Eliminar "${emp.nombre}"?`)) return;
-    await FB.setSA("empresa_"+id,{...emp,estado:"eliminado",eliminado:true,fechaEliminacion:today()});
-    LS.clearEmpresa(id);
-    toast(`🗑️ Empresa eliminada`,"ok");
-    cargarListaEmpresas();
+    const emp=_saEmpresas.find(e=>(e.id||e._id)===b.dataset.id); if(!emp) return;
+    if(!confirm2(`⚠️ ¿Eliminar "${emp.nombre}" permanentemente?`)) return;
+    if(!confirm2("Confirma: esta acción no se puede deshacer")) return;
+    await FB.setSA("empresa_"+b.dataset.id,{...emp,estado:"eliminado",eliminado:true});
+    _saEmpresas=_saEmpresas.filter(e=>(e.id||e._id)!==b.dataset.id);
+    LS.clearEmpresa(b.dataset.id);
+    toast("🗑️ Empresa eliminada","ok"); actualizarSAStats(); renderSATab();
   }));
+}
+
+// ── TAB FACTURACIÓN ──
+function attachSAFacturacionEvents(){
+  $("btnExportFacturacion")?.addEventListener("click",()=>{
+    const mes=new Date().toLocaleString("es",{month:"long",year:"numeric"});
+    let csv="Empresa,Código,Plan,Precio Base,Descuento %,Total Mes,Estado Pago,Vence
+";
+    _saEmpresas.filter(e=>e.estado!=="eliminado").forEach(e=>{
+      const plan=_saPricing?.planes?.[e.plan]||{nombre:"?",precio:0};
+      const base=plan.precio||0;
+      const total=base*(1-(e.descuentoPct||0)/100);
+      csv+=`"${e.nombre}","${e.id}","${plan.nombre}","$${base.toFixed(2)}","${e.descuentoPct||0}%","$${total.toFixed(2)}","${e.pagado?"Pagado":"Pendiente"}","${e.fechaVence||"—"}"
+`;
+    });
+    const blob=new Blob([csv],{type:"text/csv"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download=`facturacion_${mes.replace(" ","_")}.csv`;
+    a.click();
+    toast("📤 CSV exportado","ok");
+  });
+
+  $$(".sa-marcar-pagado").forEach(b=>b.addEventListener("click",async()=>{
+    const emp=_saEmpresas.find(e=>(e.id||e._id)===b.dataset.id); if(!emp) return;
+    emp.pagado=!emp.pagado;
+    await FB.setSA("empresa_"+b.dataset.id,emp);
+    toast(`${emp.pagado?"✅ Marcado pagado":"↩️ Marcado pendiente"}`,"ok");
+    renderSATab();
+  }));
+
+  $$(".sa-renovar").forEach(b=>b.addEventListener("click",async()=>{
+    const emp=_saEmpresas.find(e=>(e.id||e._id)===b.dataset.id); if(!emp) return;
+    const hoy=new Date();
+    hoy.setDate(hoy.getDate()+30);
+    emp.fechaVence=hoy.toISOString().slice(0,10);
+    emp.pagado=true;
+    await FB.setSA("empresa_"+b.dataset.id,emp);
+    toast(`🔄 Renovado hasta ${emp.fechaVence}`,"ok",3000);
+    renderSATab();
+  }));
+}
+
+// ── TAB PRECIOS Y PLANES ──
+function attachSAPreciosEvents(){
+  const TODOS_MODS=["dashboard","ventas","caja","clientes","catalogo","gastos","agenda",
+                    "whatsapp","contabilidad","empleados","reportes","usuarios","sucursales",
+                    "configuracion","roles"];
+
+  // ── Editar/crear Tier ──
+  const abrirModalTier=(key=null)=>{
+    const m=$("modalEditTier"); if(!m) return;
+    $("tierModulosCheck").innerHTML=TODOS_MODS.map(mod=>`
+      <label style="display:flex;gap:.4rem;align-items:center;font-size:.8rem;padding:.25rem;background:var(--surface2);border-radius:6px;cursor:pointer">
+        <input type="checkbox" class="tier-mod" value="${mod}" style="width:auto">
+        ${mod}
+      </label>`).join("");
+    if(key){
+      const t=_saPricing.tiers[key];
+      $("modalTierTitle").textContent="Editar Tier";
+      $("tierNombre").value=t.nombre; $("tierPrecio").value=t.precio;
+      $("tierColor").value=t.color||"blue"; $("tierDesc").value=t.descripcion||"";
+      $("tierEditKey").value=key;
+      $$(".tier-mod").forEach(c=>c.checked=(t.modulos||[]).includes(c.value));
+    } else {
+      $("modalTierTitle").textContent="Nuevo Tier";
+      ["tierNombre","tierDesc"].forEach(id=>{const el=$(id);if(el)el.value="";});
+      $("tierPrecio").value="2"; $("tierColor").value="blue"; $("tierEditKey").value="";
+    }
+    m.style.display="flex";
+  };
+
+  $("btnNuevoTier")?.addEventListener("click",()=>abrirModalTier());
+  $$(".sa-edit-tier").forEach(b=>b.addEventListener("click",()=>abrirModalTier(b.dataset.tier)));
+  const cerrarTier=()=>{ const m=$("modalEditTier");if(m)m.style.display="none"; };
+  $("cerrarModalTier")?.addEventListener("click",cerrarTier);
+  $("cerrarModalTier2")?.addEventListener("click",cerrarTier);
+
+  $("btnGuardarTier")?.addEventListener("click",async()=>{
+    const nombre=$("tierNombre")?.value.trim();
+    const precio=parseFloat($("tierPrecio")?.value)||0;
+    const color=$("tierColor")?.value||"blue";
+    const descripcion=$("tierDesc")?.value.trim()||"";
+    const modulos=[...$$("#modalEditTier .tier-mod")].filter(c=>c.checked).map(c=>c.value);
+    if(!nombre) return toast("⚠️ Nombre requerido","warn");
+    const key=$("tierEditKey")?.value||nombre.toLowerCase().replace(/\s+/g,"_");
+    _saPricing.tiers[key]={nombre,precio,color,descripcion,modulos};
+    const ok=await savePricing(_saPricing);
+    if(ok) toast("✅ Tier guardado","ok");
+    else   toast("❌ Error al guardar","err");
+    cerrarTier(); renderSATab();
+  });
+
+  // ── Editar/crear Plan ──
+  const abrirModalPlan=(key=null)=>{
+    const m=$("modalEditPlan"); if(!m) return;
+    // Checkboxes de módulos
+    $("planModulosCheck").innerHTML=TODOS_MODS.map(mod=>`
+      <label style="display:flex;gap:.4rem;align-items:center;font-size:.78rem;padding:.25rem;background:var(--surface2);border-radius:6px;cursor:pointer">
+        <input type="checkbox" class="plan-mod" value="${mod}" style="width:auto">
+        ${mod}
+      </label>`).join("");
+    // Inputs de usuarios incluidos por tier
+    $("planIncluidos").innerHTML=Object.entries(_saPricing.tiers).map(([tk,tv])=>`
+      <label style="display:flex;flex-direction:column;gap:.2rem;font-size:.78rem;min-width:80px">
+        <span style="color:var(--text2)">${tv.nombre}</span>
+        <input type="number" class="plan-inc-tier" data-tier="${tk}" min="0" value="0"
+               style="width:70px;padding:.3rem;border:1px solid var(--border);border-radius:6px;background:var(--surface2)">
+      </label>`).join("");
+    if(key){
+      const p=_saPricing.planes[key];
+      $("modalPlanTitle").textContent="Editar Plan";
+      $("planNombre").value=p.nombre; $("planPrecio").value=p.precio;
+      $("planColor").value=p.color||"green"; $("planLimite").value=p.limiteUsuarios===9999?999:p.limiteUsuarios;
+      $("planDesc").value=p.descripcion||""; $("planEditKey").value=key;
+      $$(".plan-mod").forEach(c=>c.checked=(p.modulosDisponibles||[]).includes(c.value));
+      $$(".plan-inc-tier").forEach(inp=>{
+        inp.value=(p.usuariosIncluidos||{})[inp.dataset.tier]||0;
+      });
+    } else {
+      $("modalPlanTitle").textContent="Nuevo Plan";
+      ["planNombre","planDesc"].forEach(id=>{const el=$(id);if(el)el.value="";});
+      $("planPrecio").value="9"; $("planLimite").value="10";
+      $("planColor").value="green"; $("planEditKey").value="";
+    }
+    m.style.display="flex";
+  };
+
+  $("btnNuevoPlan")?.addEventListener("click",()=>abrirModalPlan());
+  $$(".sa-edit-plan").forEach(b=>b.addEventListener("click",()=>abrirModalPlan(b.dataset.plan)));
+  const cerrarPlan=()=>{ const m=$("modalEditPlan");if(m)m.style.display="none"; };
+  $("cerrarModalPlan")?.addEventListener("click",cerrarPlan);
+  $("cerrarModalPlan2")?.addEventListener("click",cerrarPlan);
+
+  $("btnGuardarPlan")?.addEventListener("click",async()=>{
+    const nombre=$("planNombre")?.value.trim();
+    const precio=parseFloat($("planPrecio")?.value)||0;
+    const color=$("planColor")?.value||"green";
+    const limiteUsuarios=parseInt($("planLimite")?.value)||10;
+    const descripcion=$("planDesc")?.value.trim()||"";
+    const modulosDisponibles=[...$$("#modalEditPlan .plan-mod")].filter(c=>c.checked).map(c=>c.value);
+    const usuariosIncluidos={};
+    $$(".plan-inc-tier").forEach(inp=>{ usuariosIncluidos[inp.dataset.tier]=parseInt(inp.value)||0; });
+    if(!nombre) return toast("⚠️ Nombre requerido","warn");
+    if(!modulosDisponibles.length) return toast("⚠️ Selecciona al menos un módulo","warn");
+    const key=$("planEditKey")?.value||nombre.toLowerCase().replace(/\s+/g,"_");
+    _saPricing.planes[key]={nombre,precio,color,limiteUsuarios,descripcion,modulosDisponibles,usuariosIncluidos};
+    const ok=await savePricing(_saPricing);
+    if(ok) toast("✅ Plan guardado","ok");
+    else   toast("❌ Error al guardar","err");
+    cerrarPlan(); renderSATab();
+  });
+
+  $$(".sa-del-plan").forEach(b=>b.addEventListener("click",async()=>{
+    const key=b.dataset.plan;
+    const enUso=_saEmpresas.filter(e=>e.plan===key).length;
+    if(enUso>0) return toast(`⚠️ ${enUso} empresa(s) usan este plan. Reasígnalas primero.`,"err",4000);
+    if(!confirm2(`¿Eliminar el plan "${_saPricing.planes[key]?.nombre}"?`)) return;
+    delete _saPricing.planes[key];
+    await savePricing(_saPricing);
+    toast("🗑️ Plan eliminado","ok"); renderSATab();
+  }));
+}
+
+// ── Panel Mi Suscripción (visible dentro de cada empresa) ──
+async function renderSuscripcion(){
+  const emp = STATE.empresaActual;
+  if(!emp) return "<div class='empty'><p>Sin empresa activa</p></div>";
+  const pricing = await loadPricing();
+  const plan = pricing?.planes?.[emp.plan];
+  const factura = calcularFacturaEmpresa(emp, STATE.usuarios, pricing);
+
+  const tierColors={basico:"blue",avanzado:"accent",admin:"purple"};
+  const usuariosTiers = STATE.usuarios.map(u=>{
+    const tier=emp.tierUsuarios?.[u.id]||inferirTierUsuario(u,pricing);
+    const tierInfo=pricing?.tiers?.[tier]||{nombre:tier,precio:0,color:"gray"};
+    return {u, tier, tierInfo};
+  });
+
+  return `<div class="page-header"><div class="page-title">💳 Mi Suscripción</div></div>
+
+  <div class="two-col" style="align-items:start">
+    <div>
+      <div class="card" style="border-top:4px solid var(--${plan?.color||'accent'})">
+        <div class="card-title">Plan actual: ${plan?.nombre||emp.plan||"—"}</div>
+        <div class="card-sub">${plan?.descripcion||""}</div>
+        <div style="font-size:2rem;font-weight:800;color:var(--accent);margin:.5rem 0">
+          $${(plan?.precio||0).toFixed(2)}<span style="font-size:.9rem;font-weight:400;color:var(--text2)">/mes</span>
+        </div>
+        ${emp.descuentoPct?`<div class="badge bg-green" style="margin-bottom:.5rem">Descuento especial: ${emp.descuentoPct}%</div>`:""}
+        ${emp.fechaVence?`<div style="font-size:.8rem;color:${emp.fechaVence<today()?"var(--red)":"var(--text2)"}">
+          Vence: ${emp.fechaVence} ${emp.fechaVence<today()?"⚠️ VENCIDO":""}
+        </div>`:""}
+        <div class="sep"></div>
+        <div style="font-size:.83rem;color:var(--text2);margin-bottom:.5rem">Módulos incluidos en tu plan:</div>
+        <div style="display:flex;flex-wrap:wrap;gap:.3rem">
+          ${(plan?.modulosDisponibles||[]).map(m=>`<span class="badge bg-green" style="font-size:.68rem">✓ ${m}</span>`).join("")}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">📊 Resumen del mes</div>
+        ${factura.detalle.map(d=>`
+          <div style="display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--border);font-size:.85rem">
+            <span>${d.concepto}</span>
+            <span class="${d.monto<0?'c-green':'amt'}" style="font-weight:600">
+              ${d.monto<0?"-":"+"}$${Math.abs(d.monto).toFixed(2)}
+            </span>
+          </div>`).join("")}
+        <div style="display:flex;justify-content:space-between;padding:.5rem 0;font-weight:800;font-size:1rem;margin-top:.25rem">
+          <span>TOTAL ESTIMADO</span>
+          <span style="color:var(--accent)">$${factura.total.toFixed(2)}/mes</span>
+        </div>
+        ${factura.bloqueado?`<div class="alert alert-warning" style="margin-top:.5rem">⚠️ Has superado el límite de usuarios de tu plan (${factura.limiteUsuarios}). Contacta al administrador para actualizar.</div>`:""}
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <div class="card-title">👥 Usuarios activos y tiers</div>
+        <div class="card-sub">El costo adicional depende del tier de cada usuario</div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Usuario</th><th>Rol</th><th>Tier</th><th>Costo/mes</th></tr></thead>
+          <tbody>
+          ${usuariosTiers.map(({u,tier,tierInfo})=>`<tr>
+            <td><strong>${u.nombre||u.username}</strong></td>
+            <td><span class="badge bg-blue" style="font-size:.68rem">${u.role}</span></td>
+            <td><span class="badge bg-${tierInfo.color||'gray'}">${tierInfo.nombre}</span></td>
+            <td class="amt">$${(tierInfo.precio||0).toFixed(2)}</td>
+          </tr>`).join("")}
+          </tbody>
+          <tfoot><tr>
+            <td colspan="3" style="text-align:right;font-weight:700;padding:.5rem">Total usuarios:</td>
+            <td class="amt-accent" style="font-weight:800">$${usuariosTiers.reduce((s,{tierInfo})=>s+(tierInfo.precio||0),0).toFixed(2)}</td>
+          </tr></tfoot>
+        </table></div>
+        <div style="font-size:.75rem;color:var(--text2);margin-top:.5rem">
+          Límite del plan: <strong>${plan?.limiteUsuarios===9999?"Ilimitado":plan?.limiteUsuarios||"—"}</strong> usuarios
+          · Activos: <strong>${STATE.usuarios.length}</strong>
+        </div>
+      </div>
+
+      <div class="card" style="background:var(--surface2)">
+        <div class="card-title" style="font-size:.9rem">¿Necesitas más?</div>
+        <div style="font-size:.82rem;color:var(--text2)">Contacta al administrador del sistema para cambiar de plan o agregar usuarios.</div>
+        <div style="font-size:.82rem;color:var(--text2);margin-top:.5rem">📧 ${STATE.config.adminEmail||"willvillanueva555@gmail.com"}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ════════════════════════════════════════════════════════════
+//  BILLING ENGINE — SISTEMA DE PRECIOS Y SUSCRIPCIONES
+// ════════════════════════════════════════════════════════════
+
+// Precios por defecto (completamente configurables por SA)
+const PRICING_DEFAULT = {
+  version: "1.0",
+  moneda: "USD",
+  simbolo: "$",
+
+  // Tiers de usuario
+  tiers: {
+    basico:   { nombre:"Básico",      precio:2,  color:"blue",
+                modulos:["ventas","caja"],
+                descripcion:"Acceso a Ventas y Caja" },
+    avanzado: { nombre:"Avanzado",    precio:4,  color:"accent",
+                modulos:["ventas","caja","clientes","catalogo","agenda","whatsapp","reportes"],
+                descripcion:"+ Clientes, Catálogo, Agenda, WhatsApp" },
+    admin:    { nombre:"Administrador",precio:6, color:"purple",
+                modulos:["dashboard","ventas","caja","clientes","catalogo","gastos","agenda",
+                         "whatsapp","contabilidad","empleados","reportes","usuarios",
+                         "sucursales","configuracion","roles"],
+                descripcion:"Acceso completo a todos los módulos" }
+  },
+
+  // Planes por empresa
+  planes: {
+    starter: {
+      nombre:"Starter", precio:9, color:"green",
+      descripcion:"Ideal para negocios pequeños",
+      usuariosIncluidos:{ admin:1, avanzado:0, basico:2 },
+      limiteUsuarios:5,
+      modulosDisponibles:["ventas","caja","clientes","catalogo","reportes"]
+    },
+    business: {
+      nombre:"Business", precio:19, color:"blue",
+      descripcion:"Para negocios en crecimiento",
+      usuariosIncluidos:{ admin:1, avanzado:4, basico:0 },
+      limiteUsuarios:10,
+      modulosDisponibles:["dashboard","ventas","caja","clientes","catalogo",
+                          "gastos","agenda","whatsapp","reportes","empleados"]
+    },
+    pro: {
+      nombre:"Pro", precio:39, color:"accent",
+      descripcion:"Para múltiples sucursales",
+      usuariosIncluidos:{ admin:2, avanzado:8, basico:0 },
+      limiteUsuarios:25,
+      modulosDisponibles:["dashboard","ventas","caja","clientes","catalogo","gastos",
+                          "agenda","whatsapp","contabilidad","empleados","reportes",
+                          "usuarios","sucursales","configuracion","roles"]
+    },
+    enterprise: {
+      nombre:"Enterprise", precio:0, color:"purple",
+      descripcion:"Precio personalizado — ilimitado",
+      usuariosIncluidos:{ admin:999, avanzado:999, basico:999 },
+      limiteUsuarios:9999,
+      modulosDisponibles:["dashboard","ventas","caja","clientes","catalogo","gastos",
+                          "agenda","whatsapp","contabilidad","empleados","reportes",
+                          "usuarios","sucursales","configuracion","roles"]
+    }
+  }
+};
+
+// Cargar/guardar pricing desde Firebase (SA lo puede modificar)
+async function loadPricing(){
+  try{
+    const doc = await FB.getSA("_pricing");
+    return doc ? doc : PRICING_DEFAULT;
+  }catch(e){ return PRICING_DEFAULT; }
+}
+async function savePricing(pricing){
+  try{ await FB.setSA("_pricing", pricing); return true; }
+  catch(e){ return false; }
+}
+
+// ── Calcular factura mensual de una empresa ──
+function calcularFacturaEmpresa(empresa, usuarios, pricing){
+  if(!pricing||!empresa) return {total:0,detalle:[],excedente:0,bloqueado:false};
+  const plan = pricing.planes[empresa.plan];
+  if(!plan) return {total:0,detalle:[],excedente:0,bloqueado:false};
+
+  // Precio base del plan
+  let total = plan.precio || 0;
+  const detalle = [{concepto:`Plan ${plan.nombre}`, monto:total}];
+
+  // Contar usuarios reales activos por tier
+  const usrActivos = usuarios.filter(u=>!u.eliminado);
+  const conteo = { admin:0, avanzado:0, basico:0 };
+  usrActivos.forEach(u=>{
+    const tierUser = empresa.tierUsuarios?.[u.id] || inferirTierUsuario(u, pricing);
+    if(tierUser==="admin")    conteo.admin++;
+    else if(tierUser==="avanzado") conteo.avanzado++;
+    else conteo.basico++;
+  });
+
+  // Calcular excedentes sobre los incluidos en el plan
+  const incluidos = plan.usuariosIncluidos || {};
+  let excedente = 0;
+  Object.entries(conteo).forEach(([tier, num])=>{
+    const inc = incluidos[tier] || 0;
+    const extra = Math.max(0, num - inc);
+    if(extra > 0){
+      const precio = pricing.tiers[tier]?.precio || 0;
+      const monto = extra * precio;
+      excedente += monto;
+      detalle.push({concepto:`${extra} ${pricing.tiers[tier]?.nombre||tier} adicional(es)`, monto});
+    }
+  });
+  total += excedente;
+
+  // Aplicar descuento si hay (empresa puede tener descuento especial)
+  const descPct = empresa.descuentoPct || 0;
+  if(descPct > 0){
+    const desc = total * (descPct/100);
+    detalle.push({concepto:`Descuento ${descPct}%`, monto:-desc});
+    total -= desc;
+  }
+
+  // Verificar si excede el límite de usuarios
+  const bloqueado = usrActivos.length > (plan.limiteUsuarios || 9999);
+
+  return {total, detalle, excedente, bloqueado,
+          totalUsuarios:usrActivos.length,
+          limiteUsuarios:plan.limiteUsuarios,
+          conteo};
+}
+
+// Inferir tier de un usuario por su rol
+function inferirTierUsuario(usuario, pricing){
+  const roleName = (usuario.role||"").toLowerCase();
+  if(roleName==="administrador"||roleName==="admin"||roleName==="superadmin") return "admin";
+  // Revisar si el rol del usuario tiene módulos que corresponden a avanzado
+  const tiersKeys = Object.keys(pricing?.tiers||PRICING_DEFAULT.tiers);
+  // Por defecto: si tiene rol con muchos módulos → avanzado, sino → basico
+  return roleName.includes("avanz")||roleName.includes("advanc") ? "avanzado" : "basico";
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1650,12 +2257,13 @@ function buildLayout(){
     roles:        {icon:"🔐",label:"Roles",          grupo:"Sistema"},
     sucursales:   {icon:"◧",label:"Sucursales",     grupo:"Sistema"},
     configuracion:{icon:"◷",label:"Configuración",  grupo:"Sistema"},
+    suscripcion:  {icon:"💳",label:"Mi Suscripción",  grupo:"Sistema"},
   };
 
   // Construir sidebar filtrado por permisos del rol actual
   const grupos={"Principal":[],"Gestión":[],"Finanzas":[],"Sistema":[]};
   Object.entries(MODS).forEach(([tab,info])=>{
-    if(tienePermiso(tab)||(tab==="roles"&&rol?.esAdmin)){
+    if(tienePermiso(tab)||(tab==="roles"&&rol?.esAdmin)||(tab==="suscripcion"&&rol?.esAdmin)){
       grupos[info.grupo].push({tab,...info});
     }
   });
@@ -1742,17 +2350,25 @@ function closeSidebar(){ $("sidebar")?.classList.remove("open"); $("ovl")?.class
 
 function goTab(tab){
   STATE.activeTab=tab;
-  $$(".nav-btn[data-tab]").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
-  const mc = $("mainContent"); if(!mc) return;
-  const renders = {
+  const renders={
     dashboard:renderDashboard, ventas:renderVentas, caja:renderCaja,
     clientes:renderClientes, catalogo:renderCatalogo, gastos:renderGastos,
     agenda:renderAgenda, contabilidad:renderContabilidad, empleados:renderEmpleados,
     reportes:renderReportes, usuarios:renderUsuarios, sucursales:renderSucursales,
-    configuracion:renderConfiguracion, whatsapp:renderRecordatorios, roles:renderRoles
+    configuracion:renderConfiguracion, whatsapp:renderRecordatorios, roles:renderRoles,
+    suscripcion: ()=>renderSuscripcion()
   };
-  mc.innerHTML = renders[tab] ? renders[tab]() : `<div class="empty"><div class="empty-icon">🚧</div><p>Módulo en construcción</p></div>`;
-  attachTabEvents(tab);
+  const fn=renders[tab];
+  if(!fn) return;
+  const mc=$("mainContent"); if(!mc) return;
+  const result=fn();
+  if(result instanceof Promise){
+    mc.innerHTML=`<div class="empty"><div class="empty-icon">⏳</div><p>Cargando...</p></div>`;
+    result.then(html=>{ mc.innerHTML=html||""; attachTabEvents(tab); });
+  } else {
+    mc.innerHTML=result||"";
+    attachTabEvents(tab);
+  }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -3058,6 +3674,7 @@ function attachTabEvents(tab){
   else if(tab==="sucursales") attachSucursalesEvents();
   else if(tab==="configuracion") attachConfigEvents();
   else if(tab==="roles") attachRolesEvents();
+  // suscripcion no tiene eventos adicionales
 }
 
 // ── CAJA ──
