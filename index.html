@@ -1851,8 +1851,7 @@ Nuevo plan:`,emp.plan);
 function attachSAFacturacionEvents(){
   $("btnExportFacturacion")?.addEventListener("click",()=>{
     const mes=new Date().toLocaleString("es",{month:"long",year:"numeric"});
-    let csv="Empresa,Código,Plan,Precio Base,Descuento %,Total Mes,Estado Pago,Vence
-";
+    let csv="Empresa,Código,Plan,Precio Base,Descuento %,Total Mes,Estado Pago,Vence\n";
     _saEmpresas.filter(e=>e.estado!=="eliminado").forEach(e=>{
       const plan=_saPricing?.planes?.[e.plan]||{nombre:"?",precio:0};
       const base=plan.precio||0;
