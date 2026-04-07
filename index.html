@@ -411,6 +411,8 @@ const STATE = {
     emailjsTemplateId:"template_lldrchc",      // bienvenida nueva empresa / admin
     emailjsTemplateResetId:"template_2mv7zaa", // reseteo de contraseña
     emailjsPublicKey:"FY1omx8_ANjS7cQ1i",
+  emailjsPrivateKey:"vPJ1zIHiNcTGJhlJ-f5p9",
+    emailjsPrivateKey:"vPJ1zIHiNcTGJhlJ-f5p9",
     adminEmail:"willvillanueva555@gmail.com"
   },
   ids:{ u:1, p:1, i:1, g:1, cl:1, ci:1, ca:1, s:1 },
@@ -678,6 +680,7 @@ const CONFIG_DEFAULT_EMPRESA = {
   emailjsTemplateId:"template_lldrchc",
   emailjsTemplateResetId:"template_2mv7zaa",
   emailjsPublicKey:"FY1omx8_ANjS7cQ1i",
+  emailjsPrivateKey:"vPJ1zIHiNcTGJhlJ-f5p9",
   adminEmail:"willvillanueva555@gmail.com"
 };
 
@@ -787,9 +790,13 @@ function tienePermiso(modulo){
 // ════════════════════════════════════════════════════════════
 function initEmailJS(){
   try{
-    if(typeof emailjs!=="undefined"){
-      emailjs.init(STATE.config.emailjsPublicKey||"FY1omx8_ANjS7cQ1i");
-    }
+    if(typeof emailjs==="undefined") return;
+    // Private Key requerida por plan gratuito EmailJS
+    emailjs.init({
+      publicKey:  STATE.config.emailjsPublicKey||"FY1omx8_ANjS7cQ1i",
+      privateKey: STATE.config.emailjsPrivateKey||"vPJ1zIHiNcTGJhlJ-f5p9",
+      blockHeadless: false
+    });
   }catch(e){ console.warn("EmailJS init error:",e); }
 }
 
@@ -839,8 +846,9 @@ async function enviarEmailBienvenidaEmpresa(empresa){
     );
     return {ok:true};
   }catch(e){
-    console.error("EmailJS bienvenida error:", e);
-    return {ok:false, error:e.message};
+    console.error("EmailJS bienvenida error completo:", e);
+    console.error("Status:", e?.status, "Text:", e?.text);
+    return {ok:false, error: e?.text || e?.message || String(e)};
   }
 }
 
@@ -859,7 +867,7 @@ async function enviarEmailRestablecimiento(usuario){
     };
     await emailjs.send(
       STATE.config.emailjsServiceId||"service_jnf9wlw",
-      STATE.config.emailjsTemplateResetId||"template_2mv7zaa", // plantilla de reseteo
+      STATE.config.emailjsTemplateResetId||"template_2mv7zaa",
       params
     );
     // Actualizar contraseña en el sistema
@@ -867,8 +875,9 @@ async function enviarEmailRestablecimiento(usuario){
     if(u){ u.password=nuevaPass; saveAll(); fbSave("usuarios",STATE.usuarios); }
     return {ok:true, pass:nuevaPass};
   }catch(e){
-    console.error("EmailJS error:",e);
-    return {ok:false, error:e.message};
+    console.error("EmailJS reset error completo:", e);
+    console.error("Status:", e?.status, "Text:", e?.text);
+    return {ok:false, error: e?.text || e?.message || String(e)};
   }
 }
 
