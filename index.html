@@ -490,6 +490,19 @@ const FB = {
     return out;
   },
 
+  // Leer documento desde colección LEGACY (antes del multi-tenant)
+  async getLegacy(docId){
+    const url=`https://firestore.googleapis.com/v1/projects/${this.project}/databases/(default)/documents/negocio/${docId}?key=${this.apiKey}`;
+    const r=await fetch(url);
+    if(r.status===404) return null;
+    if(!r.ok) return null;
+    const doc=await r.json();
+    if(!doc.fields) return null;
+    const out={};
+    Object.entries(doc.fields).forEach(([k,v])=>{ out[k]=this.fromFB(v); });
+    return out;
+  },
+
   // Listar documentos de una colección
   async list(colPath){
     const url=`https://firestore.googleapis.com/v1/projects/${this.project}/databases/(default)/documents/${colPath}?key=${this.apiKey}`;
@@ -589,13 +602,18 @@ async function loadFromFirebase(){
   if(!STATE.empresaActual?.id) return false;
   updateSyncIndicator("loading");
   try{
-    const meta=await FB.get("_meta");
+    // Para ROYAL01: intentar cargar desde nueva ruta multi-tenant
+    // Si no existe, usar colección legacy /negocio/ como fallback
+    const esRoyal = STATE.empresaActual.id === "ROYAL01";
+    const meta = await FB.get("_meta") || (esRoyal ? await FB.getLegacy("_meta") : null);
     if(meta){
       if(meta.config) STATE.config={...STATE.config,...meta.config};
       if(meta.ids)    STATE.ids={...STATE.ids,...meta.ids};
     }
     await Promise.all(FB_COLS.map(async k=>{
-      const doc=await FB.get(k);
+      let doc = await FB.get(k);
+      // Fallback a colección legacy para ROYAL01
+      if(!doc && esRoyal) doc = await FB.getLegacy(k);
       if(doc&&Array.isArray(doc.datos)){ STATE[k]=doc.datos; LS.save(k,doc.datos); }
     }));
     _fbReady=true;
@@ -649,13 +667,14 @@ const CONFIG_DEFAULT_EMPRESA = {
 };
 
 function loadAll(){
+  // Restaurar superadmin
+  if(sessionStorage.getItem("np_sa")==="1"){ STATE.isSuperAdmin=true; STATE.user={id:0,username:"superadmin",role:"superadmin",nombre:"Super Admin"}; }
+
   // Restaurar empresa desde sessionStorage antes de cargar datos
   if(!STATE.empresaActual){
     const empSaved=sessionStorage.getItem("np_empresa");
     if(empSaved){ try{ STATE.empresaActual=JSON.parse(empSaved); }catch(e){} }
   }
-  // Restaurar superadmin
-  if(sessionStorage.getItem("np_sa")==="1"){ STATE.isSuperAdmin=true; STATE.user={id:0,username:"superadmin",role:"superadmin",nombre:"Super Admin"}; }
 
   // Cargar datos locales (prefijados por empresa)
   const fields = ["usuarios","productos","ingresos","gastos","clientes","citas","cajas","sucursales","roles"];
@@ -690,6 +709,32 @@ function loadAll(){
   // Asegurar que admin tenga su correo de respaldo
   const adminUser=STATE.usuarios.find(u=>u.role==="admin"||u.id===1);
   if(adminUser&&!adminUser.email) adminUser.email="willvillanueva555@gmail.com";
+
+  // ── Migración automática de datos legacy ──
+  // Si hay datos en localStorage sin prefijo de empresa, son de Royal Barbershop
+  // Los migramos automáticamente a la empresa ROYAL01
+  if(!STATE.empresaActual){
+    const legacyUsuarios = localStorage.getItem("np_usuarios");
+    if(legacyUsuarios){
+      // Hay datos legacy → auto-asignar empresa ROYAL01
+      const empRoyal = {
+        id:"ROYAL01", nombre:"Royal Barbershop",
+        tipo:"barberia", moneda:"$", pais:"SV",
+        plan:"completo", estado:"activo",
+        emailAdmin:"willvillanueva555@gmail.com",
+        fechaCreacion:"2024-01-01", creadoPor:"migración_automática"
+      };
+      STATE.empresaActual = empRoyal;
+      sessionStorage.setItem("np_empresa", JSON.stringify(empRoyal));
+      // Migrar datos legacy al nuevo prefijo
+      const legacyKeys=["usuarios","productos","ingresos","gastos","clientes","citas","cajas","sucursales","roles","config","ids"];
+      legacyKeys.forEach(k=>{
+        const val=localStorage.getItem("np_"+k);
+        if(val) localStorage.setItem("np_ROYAL01_"+k, val);
+      });
+      console.log("✅ Datos migrados a empresa ROYAL01");
+    }
+  }
   applyTheme(STATE.config.tema);
   STATE.calMes = new Date();
 
@@ -731,6 +776,21 @@ function initEmailJS(){
       emailjs.init(STATE.config.emailjsPublicKey||"FY1omx8_ANjS7cQ1i");
     }
   }catch(e){ console.warn("EmailJS init error:",e); }
+}
+
+// Registrar empresa ROYAL01 en superadmin si no existe
+async function asegurarRoyalEnSuperAdmin(){
+  try{
+    const existe = await FB.getSA("empresa_ROYAL01");
+    if(!existe){
+      await FB.setSA("empresa_ROYAL01", {
+        nombre:"Royal Barbershop", tipo:"barberia", moneda:"$", pais:"SV",
+        plan:"completo", estado:"activo", emailAdmin:"willvillanueva555@gmail.com",
+        fechaCreacion:today(), creadoPor:"sistema_original"
+      });
+      console.log("✅ ROYAL01 registrada en superadmin");
+    }
+  }catch(e){ console.warn("asegurarRoyal:",e.message); }
 }
 
 function generarPasswordTemporal(){
@@ -1241,7 +1301,7 @@ function attachLoginEvents(){
           const userAct=STATE.usuarios.find(x=>x.username===STATE.user.username&&x.password===p);
           if(userAct){ STATE.user={id:userAct.id,username:userAct.username,role:userAct.role,nombre:userAct.nombre||userAct.username}; sessionStorage.setItem("np_session",JSON.stringify(STATE.user)); }
           applyTheme(STATE.config.tema); renderApp();
-          if(ok) toast("☁️ Sincronizado","ok",2000);
+          if(ok){ toast("☁️ Sincronizado","ok",2000); asegurarRoyalEnSuperAdmin(); }
         });
         return true;
       }
