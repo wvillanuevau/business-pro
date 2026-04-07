@@ -652,20 +652,32 @@ async function cargarEmpresaPorCodigo(codigo){
 
 // Inicializar empresa nueva en Firebase con datos por defecto
 async function inicializarEmpresaEnFirebase(empresa){
+  return inicializarEmpresaEnFirebaseConPass(empresa, "admin", "admin123");
+}
+
+// Versión con usuario y contraseña personalizados
+async function inicializarEmpresaEnFirebaseConPass(empresa, adminUser, adminPass){
   const empId = empresa.id;
   await fbSaveEmpresa(empresa);
   const adminEmp = [{
-    id:1, username:"admin", password:"admin123",
+    id:1, username:adminUser, password:adminPass,
     role:"Administrador", nombre:"Administrador",
-    email:empresa.emailAdmin||"", comision:0, sucursalId:null
+    email:empresa.emailAdmin||empresa.propietario?.email||"",
+    comision:0, sucursalId:null
   }];
   await FB.set("usuarios", {datos:adminEmp}, empId);
   await FB.set("_meta", {
-    config:{...CONFIG_DEFAULT_EMPRESA, nombreNegocio:empresa.nombre, moneda:empresa.moneda||"$"},
+    config:{
+      ...CONFIG_DEFAULT_EMPRESA,
+      nombreNegocio:empresa.nombre,
+      moneda:empresa.moneda||"$",
+      nit:empresa.propietario?.nit||"",
+      telefono:empresa.telefono||empresa.propietario?.telefono||"",
+      direccion:empresa.direccion||empresa.propietario?.direccion||""
+    },
     ids:{u:2,p:1,i:1,g:1,cl:1,ci:1,ca:1,s:1},
     ts:new Date().toISOString()
   }, empId);
-  // Guardar tier por defecto del admin
   const tierUsuarios={1:"admin"};
   await FB.set("_tierUsuarios",{datos:tierUsuarios}, empId);
 }
@@ -1486,30 +1498,32 @@ function buildSATabEmpresas(empresas, pricing){
   return `
   <div class="card" style="margin-bottom:1.5rem">
     <div class="card-title">🏢 Nueva Empresa</div>
-    <div class="form-grid">
-      <div class="fg span2"><label>Nombre *</label><input id="saEmpNombre" placeholder="Ej: Salon Elegance..."></div>
+
+    <!-- SECCIÓN 1: Datos del negocio -->
+    <div style="font-size:.78rem;font-weight:700;color:var(--accent);letter-spacing:.08em;text-transform:uppercase;margin-bottom:.5rem;margin-top:.25rem">📋 Datos del Negocio</div>
+    <div class="form-grid" style="margin-bottom:1rem">
+      <div class="fg span2"><label>Nombre del negocio *</label><input id="saEmpNombre" placeholder="Ej: Salon Elegance, Ferretería Díaz..."></div>
       <div class="fg"><label>Código de acceso *</label>
         <div style="display:flex;gap:.5rem">
           <input id="saEmpCodigo" placeholder="SALON01" style="text-transform:uppercase;letter-spacing:.1em;font-weight:700">
-          <button class="btn btn-ghost btn-sm" id="btnGenerarCodigo">🎲</button>
+          <button class="btn btn-ghost btn-sm" id="btnGenerarCodigo" title="Generar código automático">🎲</button>
         </div>
       </div>
-      <div class="fg"><label>Email del admin</label><input id="saEmpEmail" type="email" placeholder="admin@empresa.com"></div>
       <div class="fg"><label>Tipo de negocio</label>
         <select id="saEmpTipo">
           <option value="barberia">💈 Barbería / Salón</option>
-          <option value="restaurante">🍽️ Restaurante</option>
+          <option value="restaurante">🍽️ Restaurante / Cafetería</option>
           <option value="tienda">🛒 Tienda / Retail</option>
-          <option value="servicios">🔧 Servicios</option>
+          <option value="servicios">🔧 Servicios Generales</option>
           <option value="farmacia">💊 Farmacia</option>
-          <option value="gym">🏋️ Gimnasio</option>
+          <option value="gym">🏋️ Gimnasio / Fitness</option>
           <option value="veterinaria">🐾 Veterinaria</option>
           <option value="otro">📋 Otro</option>
         </select>
       </div>
       <div class="fg"><label>Moneda</label>
         <select id="saEmpMoneda">
-          <option value="$">$ Dólar</option><option value="Q">Q Quetzal</option>
+          <option value="$">$ Dólar (USD)</option><option value="Q">Q Quetzal</option>
           <option value="C$">C$ Córdoba</option><option value="L">L Lempira</option>
           <option value="₡">₡ Colón</option><option value="€">€ Euro</option>
         </select>
@@ -1522,8 +1536,44 @@ function buildSATabEmpresas(empresas, pricing){
           <option value="MX">🇲🇽 México</option><option value="otro">Otro</option>
         </select>
       </div>
+      <div class="fg span2"><label>Dirección del negocio</label><input id="saEmpDireccion" placeholder="Dirección completa del negocio"></div>
+      <div class="fg"><label>Teléfono del negocio</label><input id="saEmpTelefono" placeholder="0000-0000"></div>
+      <div class="fg"><label>Email del negocio</label><input id="saEmpEmail" type="email" placeholder="contacto@negocio.com"></div>
+    </div>
+
+    <!-- SECCIÓN 2: Datos del propietario -->
+    <div style="font-size:.78rem;font-weight:700;color:var(--accent);letter-spacing:.08em;text-transform:uppercase;margin-bottom:.5rem;border-top:1px solid var(--border);padding-top:.75rem">👤 Datos del Propietario</div>
+    <div class="form-grid" style="margin-bottom:1rem">
+      <div class="fg span2"><label>Nombre completo del propietario *</label><input id="saEmpPropNombre" placeholder="Nombre completo"></div>
+      <div class="fg"><label>DUI (Documento Único de Identidad)</label><input id="saEmpPropDui" placeholder="00000000-0" maxlength="10"></div>
+      <div class="fg"><label>NIT (Número de Identificación Tributaria)</label><input id="saEmpPropNit" placeholder="0000-000000-000-0"></div>
+      <div class="fg"><label>Teléfono propietario</label><input id="saEmpPropTel" placeholder="0000-0000" type="tel"></div>
+      <div class="fg"><label>Email propietario</label><input id="saEmpPropEmail" type="email" placeholder="propietario@email.com"></div>
+      <div class="fg span2"><label>Dirección propietario</label><input id="saEmpPropDir" placeholder="Dirección de residencia"></div>
+    </div>
+
+    <!-- SECCIÓN 3: Credenciales de acceso del admin -->
+    <div style="font-size:.78rem;font-weight:700;color:var(--accent);letter-spacing:.08em;text-transform:uppercase;margin-bottom:.5rem;border-top:1px solid var(--border);padding-top:.75rem">🔐 Credenciales del Administrador</div>
+    <div class="form-grid" style="margin-bottom:1rem">
+      <div class="fg"><label>Usuario administrador</label><input id="saEmpAdminUser" value="admin" placeholder="admin"></div>
+      <div class="fg"><label>Contraseña inicial</label>
+        <div style="display:flex;gap:.5rem">
+          <input id="saEmpAdminPass" placeholder="Contraseña" value="admin123">
+          <button class="btn btn-ghost btn-sm" id="btnGenerarPass" title="Generar contraseña segura">🎲</button>
+        </div>
+      </div>
+      <div class="fg span2">
+        <div style="background:var(--surface2);border-radius:var(--r);padding:.6rem .75rem;font-size:.78rem;color:var(--text2)">
+          ⚠️ Anota estas credenciales antes de crear la empresa. El administrador deberá cambiar su contraseña en el primer login.
+        </div>
+      </div>
+    </div>
+
+    <!-- SECCIÓN 4: Plan y configuración -->
+    <div style="font-size:.78rem;font-weight:700;color:var(--accent);letter-spacing:.08em;text-transform:uppercase;margin-bottom:.5rem;border-top:1px solid var(--border);padding-top:.75rem">⚙️ Plan y Configuración</div>
+    <div class="form-grid">
       <div class="fg"><label>Plan</label><select id="saEmpPlan">${optsPlanes}</select></div>
-      <div class="fg"><label>Descuento especial %</label><input id="saEmpDescuento" type="number" value="0" min="0" max="100" placeholder="0"></div>
+      <div class="fg"><label>Descuento especial %</label><input id="saEmpDescuento" type="number" value="0" min="0" max="100"></div>
       <div class="fg"><label>Estado</label>
         <select id="saEmpEstado">
           <option value="activo">✅ Activo</option>
@@ -1531,9 +1581,11 @@ function buildSATabEmpresas(empresas, pricing){
           <option value="suspendido">⛔ Suspendido</option>
         </select>
       </div>
-      <div class="fg"><label>Vence el (opcional)</label><input id="saEmpVence" type="date"></div>
-      <div class="fg span2"><label>Notas</label><input id="saEmpNotas" placeholder="Contacto, fecha de pago, observaciones..."></div>
-      <div style="display:flex;align-items:flex-end"><button class="btn btn-primary" id="btnCrearEmpresa">🏢 Crear empresa</button></div>
+      <div class="fg"><label>Fecha de vencimiento</label><input id="saEmpVence" type="date"></div>
+      <div class="fg span2"><label>Notas internas</label><input id="saEmpNotas" placeholder="Observaciones, recordatorios de pago..."></div>
+      <div style="display:flex;align-items:flex-end;gap:.5rem">
+        <button class="btn btn-primary" id="btnCrearEmpresa">🏢 Crear empresa</button>
+      </div>
     </div>
   </div>
 
@@ -1560,7 +1612,11 @@ function buildSAListaEmpresas(empresas, pricing){
       const venceClass = e.fechaVence && e.fechaVence < today() ? "c-red" : "c-green";
       return `<tr>
         <td><span style="font-family:var(--mono);font-weight:700;color:var(--accent)">${e.id||"?"}</span></td>
-        <td><strong>${e.nombre||"—"}</strong><br><span style="font-size:.7rem;color:var(--text2)">${e.emailAdmin||""}</span></td>
+        <td>
+          <strong>${e.nombre||"—"}</strong>
+          ${!e.credencialesEntregadas?`<span class="badge bg-red" style="font-size:.65rem;margin-left:.3rem">⚠️ Pendiente entrega</span>`:`<span class="badge bg-green" style="font-size:.65rem;margin-left:.3rem">✓ Entregado</span>`}
+          <br><span style="font-size:.7rem;color:var(--text2)">${e.emailAdmin||""}</span>
+        </td>
         <td><span class="badge bg-${planInfo?.color||"gray"}">${planInfo?.nombre||e.plan||"—"}</span>
             ${e.descuentoPct?`<span class="badge bg-green" style="margin-left:.2rem">-${e.descuentoPct}%</span>`:""}</td>
         <td><span class="badge ${estadoBadge[e.estado]||"bg-gray"}">${e.estado||"activo"}</span></td>
@@ -1568,8 +1624,10 @@ function buildSAListaEmpresas(empresas, pricing){
         <td><span class="${venceClass}" style="font-size:.78rem">${e.fechaVence||"—"}</span></td>
         <td style="display:flex;gap:.3rem;flex-wrap:wrap">
           <button class="icon-btn sa-entrar" data-id="${e.id||e._id}" title="Ver empresa">👁️</button>
-          <button class="icon-btn sa-editar" data-id="${e.id||e._id}" title="Editar">✏️</button>
-          <button class="icon-btn sa-suspender" data-id="${e.id||e._id}" data-estado="${e.estado}" title="Estado">
+          <button class="icon-btn sa-editar" data-id="${e.id||e._id}" title="Editar plan/descuento">✏️</button>
+          <button class="icon-btn sa-otp" data-id="${e.id||e._id}" title="Asignar nueva contraseña OTP al admin">🔑</button>
+          <button class="icon-btn sa-creds" data-id="${e.id||e._id}" title="Ver credenciales guardadas">📋</button>
+          <button class="icon-btn sa-suspender" data-id="${e.id||e._id}" data-estado="${e.estado}" title="Cambiar estado">
             ${e.estado==="suspendido"?"✅":"⛔"}
           </button>
           <button class="icon-btn sa-del" data-id="${e.id||e._id}" title="Eliminar" style="color:var(--red)">🗑️</button>
@@ -1803,53 +1861,140 @@ function attachSATabEvents(tab){
 }
 
 // ── TAB EMPRESAS ──
+function generarPassSegura(){
+  const upper="ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const lower="abcdefghjkmnpqrstuvwxyz";
+  const nums="23456789";
+  const syms="@#$!";
+  let pass=upper[Math.floor(Math.random()*upper.length)]+
+           lower[Math.floor(Math.random()*lower.length)]+
+           nums[Math.floor(Math.random()*nums.length)]+
+           syms[Math.floor(Math.random()*syms.length)];
+  const all=upper+lower+nums+syms;
+  for(let i=0;i<6;i++) pass+=all[Math.floor(Math.random()*all.length)];
+  return pass.split("").sort(()=>Math.random()-.5).join("");
+}
+
+// Sistema de recordatorios SA — toasts permanentes
+const _saRecordatorios = [];
+function agregarRecordatorioSA(id, mensaje, tipo="warn"){
+  if(_saRecordatorios.find(r=>r.id===id)) return; // no duplicar
+  _saRecordatorios.push({id, mensaje, tipo, fecha:today()});
+  mostrarBannerRecordatoriosSA();
+}
+function eliminarRecordatorioSA(id){
+  const idx=_saRecordatorios.findIndex(r=>r.id===id);
+  if(idx>=0) _saRecordatorios.splice(idx,1);
+  mostrarBannerRecordatoriosSA();
+}
+function mostrarBannerRecordatoriosSA(){
+  let banner=document.getElementById("saBannerRec");
+  if(!banner){
+    banner=document.createElement("div");
+    banner.id="saBannerRec";
+    banner.style.cssText="position:fixed;top:0;left:0;right:0;z-index:8000;display:flex;flex-direction:column;gap:2px";
+    document.body.appendChild(banner);
+  }
+  banner.innerHTML=_saRecordatorios.map(r=>`
+    <div style="background:${r.tipo==="warn"?"var(--accent)":"var(--red)"};color:var(--bg);
+      padding:.6rem 1rem;display:flex;justify-content:space-between;align-items:center;
+      font-size:.83rem;font-weight:600;gap:1rem">
+      <span>⚠️ ${r.mensaje}</span>
+      <button onclick="eliminarRecordatorioSA('${r.id}')"
+        style="background:rgba(0,0,0,.2);border:none;border-radius:6px;padding:.2rem .6rem;
+        cursor:pointer;color:inherit;font-size:.8rem">✓ Listo</button>
+    </div>`).join("");
+}
+
 function attachSAEmpresasEvents(){
+  // Generar código
   $("btnGenerarCodigo")?.addEventListener("click",()=>{
     const nombre=$("saEmpNombre")?.value.trim();
     const base=nombre?nombre.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,5):"EMP";
     if($("saEmpCodigo")) $("saEmpCodigo").value=base+Math.floor(Math.random()*900+100);
   });
 
+  // Generar contraseña segura
+  $("btnGenerarPass")?.addEventListener("click",()=>{
+    const pass=generarPassSegura();
+    if($("saEmpAdminPass")) $("saEmpAdminPass").value=pass;
+    // Mostrar en alerta para que puedas anotarla
+    toast(`🔑 Contraseña: ${pass} — ¡Anótala!`,"ok",8000);
+  });
+
   $("btnCrearEmpresa")?.addEventListener("click",async()=>{
     const nombre=$("saEmpNombre")?.value.trim();
     const codigo=($("saEmpCodigo")?.value||"").toUpperCase().trim();
-    const email=$("saEmpEmail")?.value.trim()||"";
+    const adminUser=$("saEmpAdminUser")?.value.trim()||"admin";
+    const adminPass=$("saEmpAdminPass")?.value||"admin123";
     if(!nombre||!codigo) return toast("⚠️ Nombre y código requeridos","warn");
     if(codigo.length<4)  return toast("⚠️ Código mínimo 4 caracteres","warn");
+    if(!adminPass||adminPass.length<6) return toast("⚠️ Contraseña mínimo 6 caracteres","warn");
+
     const plan=$("saEmpPlan")?.value||"starter";
     const planInfo=_saPricing?.planes?.[plan]||{};
+
     const empresa={
-      id:codigo, nombre, emailAdmin:email,
+      id:codigo, nombre,
+      emailAdmin:$("saEmpEmail")?.value.trim()||"",
+      telefono:$("saEmpTelefono")?.value.trim()||"",
+      direccion:$("saEmpDireccion")?.value.trim()||"",
       tipo:$("saEmpTipo")?.value||"otro",
       moneda:$("saEmpMoneda")?.value||"$",
       pais:$("saEmpPais")?.value||"SV",
+      // Datos del propietario
+      propietario:{
+        nombre:$("saEmpPropNombre")?.value.trim()||"",
+        dui:$("saEmpPropDui")?.value.trim()||"",
+        nit:$("saEmpPropNit")?.value.trim()||"",
+        telefono:$("saEmpPropTel")?.value.trim()||"",
+        email:$("saEmpPropEmail")?.value.trim()||"",
+        direccion:$("saEmpPropDir")?.value.trim()||""
+      },
+      // Credenciales admin iniciales (referencia interna)
+      adminUser, adminPassInicial:adminPass,
       plan, modulos:planInfo.modulosDisponibles||[],
       descuentoPct:parseFloat($("saEmpDescuento")?.value)||0,
       estado:$("saEmpEstado")?.value||"activo",
       fechaVence:$("saEmpVence")?.value||"",
       notas:$("saEmpNotas")?.value||"",
       fechaCreacion:today(), creadoPor:"superadmin",
-      pagado:false, numUsuarios:1
+      pagado:false, numUsuarios:1,
+      credencialesEntregadas:false  // para recordatorio
     };
+
     const btn=$("btnCrearEmpresa"); if(btn) btn.disabled=true;
-    toast("⏳ Creando...","ok",2000);
+    toast("⏳ Creando empresa...","ok",2000);
     try{
-      await inicializarEmpresaEnFirebase(empresa);
+      // Crear empresa con la contraseña que definiste
+      await inicializarEmpresaEnFirebaseConPass(empresa, adminUser, adminPass);
       _saEmpresas.push(empresa);
-      toast(`✅ Empresa "${nombre}" creada — Código: ${codigo}`,"ok",5000);
 
-      // Enviar correo de bienvenida al admin de la empresa
-      if(empresa.emailAdmin){
-        toast("📧 Enviando correo de acceso...","ok",2000);
-        const mailResult = await enviarEmailBienvenidaEmpresa(empresa);
-        if(mailResult.ok){
-          toast(`📧 Correo enviado a ${empresa.emailAdmin}`,"ok",4000);
-        } else {
-          toast(`⚠️ Empresa creada pero el correo falló: ${mailResult.error}`,"warn",5000);
-        }
-      }
+      // Mostrar resumen de credenciales para entrega manual
+      const resumen=`✅ EMPRESA CREADA
+━━━━━━━━━━━━━━━━━━━━
+Empresa: ${nombre}
+Código:  ${codigo}
+Usuario: ${adminUser}
+Pass:    ${adminPass}
+━━━━━━━━━━━━━━━━━━━━
+Entrega estas credenciales al cliente.`;
+      alert(resumen); // Alert para que puedas copiar
 
-      ["saEmpNombre","saEmpCodigo","saEmpEmail","saEmpNotas","saEmpDescuento"].forEach(id=>{const el=$(id);if(el)el.value="";});
+      // Agregar recordatorio SA si no se han entregado credenciales
+      agregarRecordatorioSA(
+        "cred_"+codigo,
+        `Entregar credenciales a: ${nombre} (Código: ${codigo}, User: ${adminUser}, Pass: ${adminPass})`,
+        "warn"
+      );
+
+      const camposLimpiar=["saEmpNombre","saEmpCodigo","saEmpEmail","saEmpTelefono",
+        "saEmpDireccion","saEmpPropNombre","saEmpPropDui","saEmpPropNit",
+        "saEmpPropTel","saEmpPropEmail","saEmpPropDir","saEmpNotas","saEmpDescuento"];
+      camposLimpiar.forEach(id=>{const el=$(id);if(el)el.value="";});
+      if($("saEmpAdminUser")) $("saEmpAdminUser").value="admin";
+      if($("saEmpAdminPass")) $("saEmpAdminPass").value="admin123";
+
       actualizarSAStats(); renderSATab();
     }catch(e){ toast(`❌ ${e.message}`,"err",4000); }
     finally{ if(btn) btn.disabled=false; }
@@ -1882,6 +2027,88 @@ Nuevo plan:`,emp.plan);
     emp.modulos=_saPricing.planes[nuevoPlan].modulosDisponibles||[];
     FB.setSA("empresa_"+b.dataset.id, emp);
     toast("✅ Empresa actualizada","ok"); renderSATab();
+  }));
+
+  // ── OTP Manual — asignar nueva contraseña al admin de la empresa ──
+  $$(".sa-otp").forEach(b=>b.addEventListener("click",async()=>{
+    const emp=_saEmpresas.find(e=>(e.id||e._id)===b.dataset.id); if(!emp) return;
+    const nuevaPass=prompt(
+      `Nueva contraseña para admin de "${emp.nombre}"
+
+Escribe la contraseña o deja vacío para generar una automáticamente:`,
+      ""
+    );
+    if(nuevaPass===null) return; // canceló
+    const pass = nuevaPass.trim() || generarPassSegura();
+    if(pass.length<6){ toast("⚠️ Mínimo 6 caracteres","warn"); return; }
+
+    // Cargar usuarios de esa empresa y actualizar el admin
+    try{
+      const doc = await FB.get("usuarios", b.dataset.id);
+      const usuarios = doc?.datos||[];
+      const adminEmp = usuarios.find(u=>u.role==="Administrador"||u.role==="admin"||u.id===1);
+      if(!adminEmp){ toast("⚠️ No se encontró el usuario admin","warn"); return; }
+      adminEmp.password = pass;
+      await FB.set("usuarios",{datos:usuarios}, b.dataset.id);
+      // Guardar referencia en el directorio SA
+      emp.adminPassInicial=pass;
+      await FB.setSA("empresa_"+b.dataset.id, emp);
+      // Agregar recordatorio para entregar la nueva contraseña
+      agregarRecordatorioSA(
+        "otp_"+b.dataset.id+"_"+Date.now(),
+        `Entregar nueva contraseña a ${emp.nombre}: Usuario "${adminEmp.username}" → Pass: ${pass}`,
+        "warn"
+      );
+      alert(`✅ Contraseña actualizada
+
+Empresa: ${emp.nombre}
+Usuario: ${adminEmp.username}
+Nueva contraseña: ${pass}
+
+⚠️ Anota y entrega esta contraseña al cliente.`);
+      toast(`✅ Contraseña de ${emp.nombre} actualizada`,"ok",3000);
+    }catch(e){ toast(`❌ Error: ${e.message}`,"err",4000); }
+  }));
+
+  // ── Ver credenciales guardadas ──
+  $$(".sa-creds").forEach(b=>b.addEventListener("click",()=>{
+    const emp=_saEmpresas.find(e=>(e.id||e._id)===b.dataset.id); if(!emp) return;
+    const prop=emp.propietario||{};
+    const info=`📋 DATOS DE EMPRESA: ${emp.nombre}
+━━━━━━━━━━━━━━━━━━━━
+NEGOCIO
+  Código:    ${emp.id}
+  Tipo:      ${emp.tipo||"—"}
+  Moneda:    ${emp.moneda||"$"}
+  Plan:      ${emp.plan||"—"}
+  Estado:    ${emp.estado||"—"}
+  Vence:     ${emp.fechaVence||"Sin límite"}
+
+PROPIETARIO
+  Nombre:    ${prop.nombre||"—"}
+  DUI:       ${prop.dui||"—"}
+  NIT:       ${prop.nit||"—"}
+  Teléfono:  ${prop.telefono||"—"}
+  Email:     ${prop.email||"—"}
+  Dirección: ${prop.direccion||"—"}
+
+ACCESO ADMIN
+  Usuario:   ${emp.adminUser||"admin"}
+  Pass ref:  ${emp.adminPassInicial||"(no guardada)"}
+  Email:     ${emp.emailAdmin||"—"}
+
+NOTAS: ${emp.notas||"—"}`;
+    alert(info);
+  }));
+
+  // ── Marcar credenciales como entregadas ──
+  $$(".sa-cred-entregada").forEach(b=>b.addEventListener("click",async()=>{
+    const emp=_saEmpresas.find(e=>(e.id||e._id)===b.dataset.id); if(!emp) return;
+    emp.credencialesEntregadas=true;
+    await FB.setSA("empresa_"+b.dataset.id,emp);
+    eliminarRecordatorioSA("cred_"+b.dataset.id);
+    toast("✅ Marcado como entregado","ok");
+    renderSATab();
   }));
 
   $$(".sa-suspender").forEach(b=>b.addEventListener("click",async()=>{
