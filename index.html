@@ -18,6 +18,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Karla:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 
 <style>
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
@@ -370,10 +371,19 @@ input[readonly]{background:var(--surface3);color:var(--text2);cursor:default}
 // ════════════════════════════════════════════════════════════
 //  ESTADO GLOBAL
 // ════════════════════════════════════════════════════════════
+// Credenciales del Super Administrador (solo tú)
+const SUPER_ADMIN = {
+  username: "superadmin",
+  password: "SA@NegocioPro2024!", // cambia esto después del primer login
+  email: "willvillanueva555@gmail.com"
+};
+
 const STATE = {
   user: null,
+  empresaActual: null,      // empresa activa
+  isSuperAdmin: false,      // modo super administrador
   usuarios: [], productos: [], ingresos: [], gastos: [],
-  clientes: [], citas: [], cajas: [], sucursales: [],
+  clientes: [], citas: [], cajas: [], sucursales: [], roles: [],
   config: {
     nombreNegocio:"NegocioPro", moneda:"$", tema:"dark",
     porcentajeComision:10, ivaPct:13,
@@ -383,7 +393,12 @@ const STATE = {
     prefijoDTE:"RBS", correlativoActual:1,
     // Preparación DTE (futuro)
     modoContribuyente:"consumidor_final",
-    paypalEmail:"", paypalNombre:""
+    paypalEmail:"", paypalNombre:"",
+    // EmailJS para restablecimiento de contraseña
+    emailjsServiceId:"service_jnf9wlw",
+    emailjsTemplateId:"template_lldrchc",
+    emailjsPublicKey:"FY1omx8_ANjS7cQ1i",
+    adminEmail:"willvillanueva555@gmail.com"
   },
   ids:{ u:1, p:1, i:1, g:1, cl:1, ci:1, ca:1, s:1 },
   activeTab:"dashboard", calMes:null
@@ -395,7 +410,14 @@ const STATE = {
 const FB = {
   project: "royal-barbershop-5d73c",
   apiKey:  "AIzaSyDq3RC-d8U0Bv7xMhWv8WdKEh3AVldUK9g",
-  base(){  return `https://firestore.googleapis.com/v1/projects/${this.project}/databases/(default)/documents/negocio`; },
+
+  // Base URL para datos de una empresa específica (multi-tenant)
+  base(empresaId){
+    const eid = empresaId || STATE.empresaActual?.id || "negocio";
+    return `https://firestore.googleapis.com/v1/projects/${this.project}/databases/(default)/documents/empresas/${eid}/datos`;
+  },
+  // Base URL para el directorio de empresas (superadmin)
+  baseSA(){ return `https://firestore.googleapis.com/v1/projects/${this.project}/databases/(default)/documents/superadmin`; },
 
   // Serializar JS → Firestore value format
   toFB(val){
@@ -422,19 +444,19 @@ const FB = {
     return null;
   },
 
-  // Guardar documento
-  async set(docId, obj){
+  // Guardar documento (en colección de empresa)
+  async set(docId, obj, empresaId=null){
     const fields={};
     Object.entries(obj).forEach(([k,v])=>{ fields[k]=this.toFB(v); });
-    const url=`${this.base()}/${docId}?key=${this.apiKey}`;
+    const url=`${this.base(empresaId)}/${docId}?key=${this.apiKey}`;
     const r=await fetch(url,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({fields})});
     if(!r.ok) throw new Error(await r.text());
     return r.json();
   },
 
-  // Leer documento
-  async get(docId){
-    const url=`${this.base()}/${docId}?key=${this.apiKey}`;
+  // Leer documento (de colección de empresa)
+  async get(docId, empresaId=null){
+    const url=`${this.base(empresaId)}/${docId}?key=${this.apiKey}`;
     const r=await fetch(url);
     if(r.status===404) return null;
     if(!r.ok) throw new Error(await r.text());
@@ -443,12 +465,48 @@ const FB = {
     const out={};
     Object.entries(doc.fields).forEach(([k,v])=>{ out[k]=this.fromFB(v); });
     return out;
+  },
+
+  // Guardar en superadmin (directorio de empresas)
+  async setSA(docId, obj){
+    const fields={};
+    Object.entries(obj).forEach(([k,v])=>{ fields[k]=this.toFB(v); });
+    const url=`${this.baseSA()}/${docId}?key=${this.apiKey}`;
+    const r=await fetch(url,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({fields})});
+    if(!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  // Leer del superadmin
+  async getSA(docId){
+    const url=`${this.baseSA()}/${docId}?key=${this.apiKey}`;
+    const r=await fetch(url);
+    if(r.status===404) return null;
+    if(!r.ok) throw new Error(await r.text());
+    const doc=await r.json();
+    if(!doc.fields) return null;
+    const out={};
+    Object.entries(doc.fields).forEach(([k,v])=>{ out[k]=this.fromFB(v); });
+    return out;
+  },
+
+  // Listar documentos de una colección
+  async list(colPath){
+    const url=`https://firestore.googleapis.com/v1/projects/${this.project}/databases/(default)/documents/${colPath}?key=${this.apiKey}`;
+    const r=await fetch(url);
+    if(!r.ok) return [];
+    const data=await r.json();
+    return (data.documents||[]).map(doc=>{
+      const out={_id:doc.name.split("/").pop()};
+      Object.entries(doc.fields||{}).forEach(([k,v])=>{ out[k]=this.fromFB(v); });
+      return out;
+    });
   }
 };
 
 let _fbReady = false;
 
-// ── Guardar colección en Firebase ──
+// ── Guardar colección en Firebase (empresa actual) ──
 async function fbSave(col, datos){
   try{ await FB.set(col, {datos}); }
   catch(e){ console.warn("fbSave",col,e.message); }
@@ -458,6 +516,20 @@ async function fbSave(col, datos){
 async function fbSaveMeta(){
   try{ await FB.set("_meta",{config:STATE.config, ids:STATE.ids, ts:new Date().toISOString()}); }
   catch(e){ console.warn("fbMeta",e.message); }
+}
+
+// ── Guardar directorio de empresa en superadmin ──
+async function fbSaveEmpresa(empresa){
+  try{ await FB.setSA("empresa_"+empresa.id, empresa); }
+  catch(e){ console.warn("fbSaveEmpresa",e.message); }
+}
+
+// ── Cargar lista de empresas (solo superadmin) ──
+async function fbLoadEmpresas(){
+  try{
+    const docs = await FB.list("superadmin");
+    return docs.filter(d=>d._id.startsWith("empresa_")).map(d=>({...d, id:d._id.replace("empresa_","")}));
+  }catch(e){ console.warn("fbLoadEmpresas",e.message); return []; }
 }
 
 // ── Indicador de sync ──
@@ -480,11 +552,20 @@ function applySyncIndicator(){
 //  PERSISTENCIA DUAL: Firebase REST + LocalStorage
 // ════════════════════════════════════════════════════════════
 const LS = {
-  save(k,v){ try{ localStorage.setItem("np_"+k,JSON.stringify(v)); }catch(e){} },
-  load(k){   try{ const v=localStorage.getItem("np_"+k); return v?JSON.parse(v):null; }catch(e){ return null; } }
+  // Prefijo incluye ID de empresa para aislar datos
+  prefix(){ return "np_"+(STATE.empresaActual?.id||"default")+"_"; },
+  save(k,v){ try{ localStorage.setItem(this.prefix()+k,JSON.stringify(v)); }catch(e){} },
+  load(k){   try{ const v=localStorage.getItem(this.prefix()+k); return v?JSON.parse(v):null; }catch(e){ return null; } },
+  // Para datos globales (no por empresa)
+  saveG(k,v){ try{ localStorage.setItem("np_g_"+k,JSON.stringify(v)); }catch(e){} },
+  loadG(k){   try{ const v=localStorage.getItem("np_g_"+k); return v?JSON.parse(v):null; }catch(e){ return null; } },
+  clearEmpresa(id){ // limpiar datos locales de una empresa
+    const prefix="np_"+id+"_";
+    Object.keys(localStorage).filter(k=>k.startsWith(prefix)).forEach(k=>localStorage.removeItem(k));
+  }
 };
 
-const FB_COLS = ["usuarios","productos","ingresos","gastos","clientes","citas","cajas","sucursales"];
+const FB_COLS = ["usuarios","productos","ingresos","gastos","clientes","citas","cajas","sucursales","roles"];
 
 // saveAll — guarda local inmediato + nube async
 function saveAll(){
@@ -503,17 +584,16 @@ function saveAll(){
   }
 }
 
-// loadFromFirebase — trae todo desde Firestore
+// loadFromFirebase — trae datos de la empresa activa
 async function loadFromFirebase(){
+  if(!STATE.empresaActual?.id) return false;
   updateSyncIndicator("loading");
   try{
-    // Meta primero
     const meta=await FB.get("_meta");
     if(meta){
       if(meta.config) STATE.config={...STATE.config,...meta.config};
       if(meta.ids)    STATE.ids={...STATE.ids,...meta.ids};
     }
-    // Colecciones
     await Promise.all(FB_COLS.map(async k=>{
       const doc=await FB.get(k);
       if(doc&&Array.isArray(doc.datos)){ STATE[k]=doc.datos; LS.save(k,doc.datos); }
@@ -524,14 +604,61 @@ async function loadFromFirebase(){
   }catch(e){
     console.warn("loadFromFirebase:",e.message);
     updateSyncIndicator("err");
-    _fbReady=true; // intentar guardar igual
+    _fbReady=true;
     return false;
   }
 }
 
+// Cargar empresa por código de acceso
+async function cargarEmpresaPorCodigo(codigo){
+  try{
+    const doc = await FB.getSA("empresa_"+codigo);
+    return doc;
+  }catch(e){ return null; }
+}
+
+// Inicializar empresa nueva en Firebase con datos por defecto
+async function inicializarEmpresaEnFirebase(empresa){
+  const empId = empresa.id;
+  // Guardar directorio
+  await fbSaveEmpresa(empresa);
+  // Crear admin de la empresa
+  const adminEmp = [{
+    id:1, username:"admin", password:"admin123",
+    role:"Administrador", nombre:"Administrador",
+    email:empresa.emailAdmin||"", comision:0, sucursalId:null
+  }];
+  await FB.set("usuarios", {datos:adminEmp}, empId);
+  await FB.set("_meta", {
+    config:{...CONFIG_DEFAULT_EMPRESA, nombreNegocio:empresa.nombre, moneda:empresa.moneda||"$"},
+    ids:{u:2,p:1,i:1,g:1,cl:1,ci:1,ca:1,s:1},
+    ts:new Date().toISOString()
+  }, empId);
+}
+
+// Config por defecto para nuevas empresas
+const CONFIG_DEFAULT_EMPRESA = {
+  moneda:"$", tema:"dark", porcentajeComision:0, ivaPct:0,
+  sucursalActiva:null, stockMinimo:5, nit:"", registroIVA:"",
+  direccion:"", telefono:"", prefijoDTE:"EMP", correlativoActual:1,
+  modoContribuyente:"consumidor_final", paypalEmail:"", paypalNombre:"",
+  emailjsServiceId:"service_jnf9wlw",
+  emailjsTemplateId:"template_lldrchc",
+  emailjsPublicKey:"FY1omx8_ANjS7cQ1i",
+  adminEmail:"willvillanueva555@gmail.com"
+};
+
 function loadAll(){
-  // Primero cargar desde localStorage (instantáneo)
-  const fields = ["usuarios","productos","ingresos","gastos","clientes","citas","cajas","sucursales"];
+  // Restaurar empresa desde sessionStorage antes de cargar datos
+  if(!STATE.empresaActual){
+    const empSaved=sessionStorage.getItem("np_empresa");
+    if(empSaved){ try{ STATE.empresaActual=JSON.parse(empSaved); }catch(e){} }
+  }
+  // Restaurar superadmin
+  if(sessionStorage.getItem("np_sa")==="1"){ STATE.isSuperAdmin=true; STATE.user={id:0,username:"superadmin",role:"superadmin",nombre:"Super Admin"}; }
+
+  // Cargar datos locales (prefijados por empresa)
+  const fields = ["usuarios","productos","ingresos","gastos","clientes","citas","cajas","sucursales","roles"];
   fields.forEach(k => { const v = LS.load(k); if(v) STATE[k]=v; });
   const cfg = LS.load("config"); if(cfg) STATE.config = {...STATE.config,...cfg};
   const ids = LS.load("ids"); if(ids) STATE.ids = {...STATE.ids,...ids};
@@ -549,6 +676,20 @@ function loadAll(){
     STATE.config.sucursalActiva=1;
     STATE.config.nombreNegocio="Royal Barbershop";
   }
+  // Roles por defecto
+  const MODULOS_TODOS = ["dashboard","ventas","caja","clientes","catalogo","gastos","agenda","whatsapp","contabilidad","empleados","reportes","usuarios","sucursales","configuracion"];
+  if(!STATE.roles.length){
+    STATE.roles=[
+      {id:"r1", nombre:"Administrador", color:"purple", modulos:[...MODULOS_TODOS], esAdmin:true},
+      {id:"r2", nombre:"Empleado",      color:"blue",   modulos:["ventas","caja","agenda","clientes"], esAdmin:false},
+      {id:"r3", nombre:"Barbero",       color:"green",  modulos:["ventas","caja","agenda","clientes"], esAdmin:false},
+      {id:"r4", nombre:"Recepcionista", color:"accent", modulos:["ventas","caja","agenda","clientes","whatsapp"], esAdmin:false},
+      {id:"r5", nombre:"Cajero",        color:"blue",   modulos:["ventas","caja","reportes"], esAdmin:false},
+    ];
+  }
+  // Asegurar que admin tenga su correo de respaldo
+  const adminUser=STATE.usuarios.find(u=>u.role==="admin"||u.id===1);
+  if(adminUser&&!adminUser.email) adminUser.email="willvillanueva555@gmail.com";
   applyTheme(STATE.config.tema);
   STATE.calMes = new Date();
 
@@ -562,6 +703,70 @@ function applyTheme(t){ document.body.className=t; STATE.config.tema=t; }
 // ════════════════════════════════════════════════════════════
 const $ = id => document.getElementById(id);
 const $$ = sel => document.querySelectorAll(sel);
+// ════════════════════════════════════════════════════════════
+//  SISTEMA DE ROLES Y PERMISOS
+// ════════════════════════════════════════════════════════════
+function getRolActual(){
+  if(!STATE.user) return null;
+  // Admin siempre tiene acceso total
+  if(STATE.user.role==="admin") return STATE.roles.find(r=>r.esAdmin)||{modulos:["dashboard","ventas","caja","clientes","catalogo","gastos","agenda","whatsapp","contabilidad","empleados","reportes","usuarios","sucursales","configuracion"],esAdmin:true};
+  // Buscar rol por nombre
+  const rol = STATE.roles.find(r=>r.nombre.toLowerCase()===STATE.user.role.toLowerCase());
+  return rol || {modulos:["ventas","caja"],esAdmin:false};
+}
+
+function tienePermiso(modulo){
+  const rol = getRolActual();
+  if(!rol) return false;
+  if(rol.esAdmin) return true;
+  return (rol.modulos||[]).includes(modulo);
+}
+
+// ════════════════════════════════════════════════════════════
+//  EMAILJS — RESTABLECIMIENTO DE CONTRASEÑA
+// ════════════════════════════════════════════════════════════
+function initEmailJS(){
+  try{
+    if(typeof emailjs!=="undefined"){
+      emailjs.init(STATE.config.emailjsPublicKey||"FY1omx8_ANjS7cQ1i");
+    }
+  }catch(e){ console.warn("EmailJS init error:",e); }
+}
+
+function generarPasswordTemporal(){
+  const chars="ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+  let pass="";
+  for(let i=0;i<10;i++) pass+=chars[Math.floor(Math.random()*chars.length)];
+  return pass;
+}
+
+async function enviarEmailRestablecimiento(usuario){
+  try{
+    initEmailJS();
+    if(typeof emailjs==="undefined") throw new Error("EmailJS no disponible");
+    const nuevaPass=generarPasswordTemporal();
+    const params={
+      negocio: STATE.config.nombreNegocio||"NegocioPro",
+      nombre: usuario.nombre||usuario.username,
+      nueva_password: nuevaPass,
+      to_email: usuario.email,
+      username: usuario.username
+    };
+    await emailjs.send(
+      STATE.config.emailjsServiceId||"service_jnf9wlw",
+      STATE.config.emailjsTemplateId||"template_lldrchc",
+      params
+    );
+    // Actualizar contraseña en el sistema
+    const u=STATE.usuarios.find(x=>x.id===usuario.id);
+    if(u){ u.password=nuevaPass; saveAll(); fbSave("usuarios",STATE.usuarios); }
+    return {ok:true, pass:nuevaPass};
+  }catch(e){
+    console.error("EmailJS error:",e);
+    return {ok:false, error:e.message};
+  }
+}
+
 // Generar correlativo único para recibos
 function generarCorrelativo(){
   const num = STATE.config.correlativoActual || 1;
@@ -752,7 +957,7 @@ function startBackup(){
 }
 function autoBackup(){
   const snap = { ts:new Date().toISOString(), ...Object.fromEntries(
-    ["usuarios","productos","ingresos","gastos","clientes","citas","cajas","sucursales","config","ids"]
+    ["usuarios","productos","ingresos","gastos","clientes","citas","cajas","sucursales","roles","config","ids"]
     .map(k=>[k,JSON.parse(JSON.stringify(STATE[k]||STATE.config))])
   )};
   let bk=[]; try{ bk=JSON.parse(localStorage.getItem("np_bk")||"[]"); }catch(e){}
@@ -804,101 +1009,600 @@ function comisionesEmpleado(empId, desde, hasta){
 // ════════════════════════════════════════════════════════════
 function renderApp(){
   const app = $("app");
-  if(!STATE.user){ app.innerHTML = buildLogin(); attachLoginEvents(); return; }
+
+  // 1. Restaurar superadmin session
+  if(sessionStorage.getItem("np_sa")==="1" && !STATE.isSuperAdmin){
+    STATE.isSuperAdmin=true;
+    STATE.user={id:0,username:"superadmin",role:"superadmin",nombre:"Super Admin"};
+  }
+
+  // 2. Restaurar empresa desde sessionStorage
+  if(!STATE.empresaActual){
+    const empSaved=sessionStorage.getItem("np_empresa");
+    if(empSaved){ try{ STATE.empresaActual=JSON.parse(empSaved); }catch(e){} }
+  }
+
+  // 3. Si es superadmin → mostrar panel SA
+  if(STATE.isSuperAdmin){
+    app.innerHTML = buildSuperAdminPanel();
+    attachSuperAdminEvents();
+    return;
+  }
+
+  // 4. Si no hay empresa → mostrar selector de empresa
+  if(!STATE.empresaActual){
+    app.innerHTML = buildLogin();
+    attachLoginEvents();
+    return;
+  }
+
+  // 5. Restaurar sesión de usuario
+  if(!STATE.user){
+    const saved=sessionStorage.getItem("np_session");
+    if(saved){
+      try{
+        const u=JSON.parse(saved);
+        const existe=STATE.usuarios.find(x=>x.id===u.id&&x.username===u.username);
+        if(existe) STATE.user={id:existe.id,username:existe.username,role:existe.role,nombre:existe.nombre||existe.username};
+      }catch(e){}
+    }
+  }
+
+  // 6. Si no hay usuario → mostrar login
+  if(!STATE.user){
+    app.innerHTML = buildLogin();
+    attachLoginEvents();
+    return;
+  }
+
+  // 7. Mostrar app normal
   app.innerHTML = buildLayout();
   attachLayoutEvents();
-  goTab(STATE.user.role==="admin"?"dashboard":"ventas");
+  const rolActual=getRolActual();
+  const primerTab=rolActual?.esAdmin?"dashboard":"ventas";
+  goTab(primerTab);
 }
 
 // ════════════════════════════════════════════════════════════
 //  LOGIN
 // ════════════════════════════════════════════════════════════
 function buildLogin(){
+  const tieneEmpresa = !!STATE.empresaActual;
+  const nombreEmpresa = STATE.empresaActual?.nombre || "";
+
   return `<div class="login-screen">
     <div class="login-card">
-      <div class="login-logo">⬡ NegocioPro</div>
-      <div class="login-tagline">Sistema de Gestión Profesional</div>
-      <div class="fg" style="margin-bottom:.75rem"><label>Usuario</label>
-        <input id="lUser" placeholder="usuario" autocomplete="username"></div>
-      <div class="fg" style="margin-bottom:1rem"><label>Contraseña</label>
-        <input id="lPass" type="password" placeholder="contraseña" autocomplete="current-password"></div>
-      <button class="btn btn-primary" id="btnLogin" style="width:100%">Iniciar sesión →</button>
-      <div id="lErr" style="color:var(--red);font-size:.8rem;text-align:center;margin-top:.75rem;min-height:1em"></div>
-      <div class="login-divider">¿Sin cuenta?</div>
-      <details><summary style="cursor:pointer;font-size:.82rem;color:var(--text2);font-weight:600">Registrarse</summary>
-        <div style="margin-top:.75rem;display:flex;flex-direction:column;gap:.5rem">
-          <input id="rUser" placeholder="Usuario"><input id="rPass" type="password" placeholder="Contraseña">
-          <select id="rRole"><option value="empleado">Empleado</option><option value="admin">Admin</option></select>
-          <button class="btn btn-outline" id="btnReg">Crear cuenta</button>
+      ${tieneEmpresa ? `
+        <div style="text-align:center;margin-bottom:.5rem">
+          <div style="font-size:.75rem;color:var(--text2);letter-spacing:.08em;text-transform:uppercase">Sistema de Gestión</div>
+          <div class="login-logo" style="font-size:1.5rem">${nombreEmpresa}</div>
+          <div style="font-size:.72rem;color:var(--text2);margin-top:.25rem">Powered by NegocioPro</div>
         </div>
-      </details>
+      ` : `
+        <div class="login-logo">⬡ NegocioPro</div>
+        <div class="login-tagline">Sistema de Gestión Profesional</div>
+      `}
+
+      ${!tieneEmpresa ? `
+        <!-- Paso 1: Ingresar código de empresa -->
+        <div id="panelCodigo">
+          <div class="fg" style="margin-bottom:.75rem">
+            <label>Código de empresa</label>
+            <input id="lCodigo" placeholder="Ingresa el código de tu empresa" autocomplete="off" style="text-align:center;letter-spacing:.15em;font-size:1.1rem;font-weight:700">
+          </div>
+          <button class="btn btn-primary" id="btnIngresarCodigo" style="width:100%">Continuar →</button>
+          <div id="lErrCodigo" style="color:var(--red);font-size:.8rem;text-align:center;margin-top:.75rem;min-height:1em"></div>
+          <div style="margin-top:1.5rem;text-align:center">
+            <a href="#" id="btnLoginSA" style="font-size:.75rem;color:var(--text3);text-decoration:none">Acceso administrador del sistema</a>
+          </div>
+        </div>
+      ` : `
+        <!-- Paso 2: Login con credenciales -->
+        <div id="panelLogin">
+          <div class="fg" style="margin-bottom:.75rem"><label>Usuario</label>
+            <input id="lUser" placeholder="usuario" autocomplete="username"></div>
+          <div class="fg" style="margin-bottom:.5rem"><label>Contraseña</label>
+            <input id="lPass" type="password" placeholder="contraseña" autocomplete="current-password"></div>
+          <div style="text-align:right;margin-bottom:1rem">
+            <a href="#" id="btnOlvidePass" style="font-size:.78rem;color:var(--accent);text-decoration:none">¿Olvidaste tu contraseña?</a>
+          </div>
+          <button class="btn btn-primary" id="btnLogin" style="width:100%">Iniciar sesión →</button>
+          <div id="lErr" style="color:var(--red);font-size:.8rem;text-align:center;margin-top:.75rem;min-height:1em"></div>
+          <div id="lMsg" style="color:var(--green);font-size:.8rem;text-align:center;margin-top:.25rem;min-height:1em"></div>
+          <div style="margin-top:1rem;text-align:center">
+            <a href="#" id="btnCambiarEmpresa" style="font-size:.75rem;color:var(--text3);text-decoration:none">← Cambiar empresa</a>
+          </div>
+          <div class="login-divider">¿Sin cuenta?</div>
+          <details><summary style="cursor:pointer;font-size:.82rem;color:var(--text2);font-weight:600">Registrarse como empleado</summary>
+            <div style="margin-top:.75rem;display:flex;flex-direction:column;gap:.5rem">
+              <input id="rNombre" placeholder="Nombre completo">
+              <input id="rUser" placeholder="Usuario (sin espacios)">
+              <input id="rPass" type="password" placeholder="Contraseña">
+              <input id="rEmail" type="email" placeholder="Correo para recuperación">
+              <div style="font-size:.72rem;color:var(--text2);background:var(--surface2);padding:.5rem;border-radius:var(--r)">
+                ℹ️ Solo puedes registrarte como empleado. El administrador asignará tu rol.
+              </div>
+              <button class="btn btn-outline" id="btnReg">Crear cuenta de empleado</button>
+            </div>
+          </details>
+        </div>
+      `}
+    </div>
+  </div>
+
+  <!-- Modal recuperar contraseña -->
+  <div id="modalRecuperar" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;align-items:center;justify-content:center;padding:1rem">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:1.75rem;width:100%;max-width:420px;box-shadow:var(--shadow-lg)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+        <strong style="font-size:1.1rem">🔑 Recuperar contraseña</strong>
+        <button id="cerrarRecuperar" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);padding:.3rem .6rem;cursor:pointer">✕</button>
+      </div>
+      <div class="fg" style="margin-bottom:.75rem"><label>Tu usuario</label><input id="recUsername" placeholder="usuario"></div>
+      <div id="recMsg" style="font-size:.82rem;min-height:1.2em;margin-bottom:.75rem"></div>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-primary" id="btnEnviarRecuperar">📧 Enviar nueva contraseña</button>
+        <button class="btn btn-ghost" id="cerrarRecuperar2">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal SuperAdmin -->
+  <div id="modalSA" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;align-items:center;justify-content:center;padding:1rem">
+    <div style="background:var(--surface);border:2px solid var(--accent);border-radius:var(--r-lg);padding:1.75rem;width:100%;max-width:380px;box-shadow:var(--shadow-lg)">
+      <div style="text-align:center;margin-bottom:1.25rem">
+        <div style="font-size:2rem">⬡</div>
+        <strong>Acceso Super Administrador</strong>
+        <div style="font-size:.75rem;color:var(--text2)">Solo para el propietario del sistema</div>
+      </div>
+      <div class="fg" style="margin-bottom:.75rem"><label>Usuario SA</label><input id="saUser" placeholder="superadmin"></div>
+      <div class="fg" style="margin-bottom:1rem"><label>Contraseña SA</label><input id="saPass" type="password" placeholder="contraseña"></div>
+      <div id="saErr" style="color:var(--red);font-size:.8rem;text-align:center;margin-bottom:.75rem;min-height:1em"></div>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-primary" id="btnLoginSAConfirm" style="flex:1">Entrar →</button>
+        <button class="btn btn-ghost" id="cerrarSA">Cancelar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+  <!-- Modal recuperar contraseña -->
+  <div id="modalRecuperar" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;align-items:center;justify-content:center;padding:1rem">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:1.75rem;width:100%;max-width:420px;box-shadow:var(--shadow-lg)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+        <strong style="font-size:1.1rem">🔑 Recuperar contraseña</strong>
+        <button id="cerrarRecuperar" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--r);padding:.3rem .6rem;cursor:pointer">✕</button>
+      </div>
+      <p style="font-size:.83rem;color:var(--text2);margin-bottom:1rem">
+        Ingresa tu nombre de usuario. Si tienes un correo registrado, recibirás una contraseña temporal.
+      </p>
+      <div class="fg" style="margin-bottom:.75rem">
+        <label>Tu usuario</label>
+        <input id="recUsername" placeholder="usuario">
+      </div>
+      <div id="recMsg" style="font-size:.82rem;min-height:1.2em;margin-bottom:.75rem"></div>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-primary" id="btnEnviarRecuperar">📧 Enviar nueva contraseña</button>
+        <button class="btn btn-ghost" id="cerrarRecuperar2">Cancelar</button>
+      </div>
     </div>
   </div>`;
 }
 
 function attachLoginEvents(){
-  const doLogin = () => {
-    const u=$("lUser").value.trim(), p=$("lPass").value;
-    const found = STATE.usuarios.find(x=>x.username===u&&x.password===p);
-    if(found){
-      STATE.user={id:found.id,username:found.username,role:found.role,nombre:found.nombre||found.username};
-      startBackup();
-      iniciarMotorRecordatorios();
-      // Mostrar app inmediatamente con datos locales
-      renderApp();
-      // Activar timer de notificaciones push
-      setInterval(checkCitasParaNotif, 60000);
-      checkCitasParaNotif();
-      // Luego sincronizar con Firebase y refrescar
-      loadFromFirebase().then(ok=>{
-        applyTheme(STATE.config.tema);
-        renderApp(); // refrescar con datos de nube
-        if(ok) toast("☁️ Sincronizado con la nube","ok",2000);
-      });
+  // ── Paso 1: ingresar código de empresa ──
+  const ingresarCodigo = async () => {
+    const codigo = ($("lCodigo")?.value||"").trim().toUpperCase();
+    if(!codigo){ $("lErrCodigo").textContent="Ingresa el código de tu empresa."; return; }
+    $("lErrCodigo").textContent="🔄 Buscando empresa...";
+    $("btnIngresarCodigo").disabled=true;
+
+    // Guardar empresa en sessionStorage para persistir entre recargas
+    const empresa = await cargarEmpresaPorCodigo(codigo);
+    if(!empresa||!empresa.nombre){
+      $("lErrCodigo").textContent="❌ Código incorrecto o empresa no encontrada.";
+      $("btnIngresarCodigo").disabled=false;
+      return;
     }
-    else $("lErr").textContent="Usuario o contraseña incorrectos.";
+    STATE.empresaActual = {...empresa, id:codigo};
+    sessionStorage.setItem("np_empresa", JSON.stringify(STATE.empresaActual));
+    // Cargar datos de esta empresa
+    await loadFromFirebase();
+    renderApp();
   };
+
+  $("btnIngresarCodigo")?.addEventListener("click", ingresarCodigo);
+  $("lCodigo")?.addEventListener("keypress", e=>{ if(e.key==="Enter") ingresarCodigo(); });
+  $("lCodigo")?.focus();
+
+  // ── Cambiar empresa ──
+  $("btnCambiarEmpresa")?.addEventListener("click", e=>{
+    e.preventDefault();
+    STATE.empresaActual=null;
+    sessionStorage.removeItem("np_empresa");
+    sessionStorage.removeItem("np_session");
+    STATE.user=null;
+    renderApp();
+  });
+
+  // ── Paso 2: login con credenciales ──
+  const doLogin = () => {
+    const u=$("lUser")?.value.trim(), p=$("lPass")?.value;
+    if(!u||!p){ if($("lErr")) $("lErr").textContent="Ingresa usuario y contraseña."; return; }
+
+    const intentarLogin=(usuarios)=>{
+      const found=usuarios.find(x=>x.username===u&&x.password===p);
+      if(found){
+        STATE.user={id:found.id,username:found.username,role:found.role,nombre:found.nombre||found.username};
+        sessionStorage.setItem("np_session",JSON.stringify(STATE.user));
+        startBackup(); iniciarMotorRecordatorios();
+        renderApp();
+        setInterval(checkCitasParaNotif,60000); checkCitasParaNotif();
+        loadFromFirebase().then(ok=>{
+          const userAct=STATE.usuarios.find(x=>x.username===STATE.user.username&&x.password===p);
+          if(userAct){ STATE.user={id:userAct.id,username:userAct.username,role:userAct.role,nombre:userAct.nombre||userAct.username}; sessionStorage.setItem("np_session",JSON.stringify(STATE.user)); }
+          applyTheme(STATE.config.tema); renderApp();
+          if(ok) toast("☁️ Sincronizado","ok",2000);
+        });
+        return true;
+      }
+      return false;
+    };
+
+    if(intentarLogin(STATE.usuarios)) return;
+    if($("lErr")) $("lErr").textContent="Verificando credenciales...";
+    loadFromFirebase().then(()=>{
+      if(!intentarLogin(STATE.usuarios)) if($("lErr")) $("lErr").textContent="Usuario o contraseña incorrectos.";
+    });
+  };
+
   $("btnLogin")?.addEventListener("click",doLogin);
   $("lPass")?.addEventListener("keypress",e=>{ if(e.key==="Enter") doLogin(); });
+
+  // ── Registro público (solo empleado) ──
   $("btnReg")?.addEventListener("click",()=>{
-    const u=$("rUser").value.trim(), p=$("rPass").value, r=$("rRole").value;
-    if(!u||!p) return toast("Completa todos los campos","warn");
-    if(STATE.usuarios.find(x=>x.username===u)) return toast("Usuario ya existe","err");
-    STATE.usuarios.push({id:uid("u"),username:u,password:p,role:r,nombre:u,comision:0,sucursalId:null});
-    saveAll(); toast("✅ Cuenta creada. Inicia sesión.","ok");
+    const nombre=$("rNombre")?.value.trim();
+    const u=$("rUser")?.value.trim(), p=$("rPass")?.value;
+    const email=$("rEmail")?.value.trim()||"";
+    if(!u||!p) return toast("⚠️ Usuario y contraseña requeridos","warn");
+    if(u.includes(" ")) return toast("⚠️ Sin espacios en el usuario","warn");
+    if(STATE.usuarios.find(x=>x.username===u)) return toast("⚠️ Ese usuario ya existe","err");
+    STATE.usuarios.push({id:uid("u"),username:u,password:p,role:"Empleado",nombre:nombre||u,email,comision:0,sucursalId:null});
+    saveAll(); fbSave("usuarios",STATE.usuarios);
+    toast("✅ Cuenta creada. El administrador asignará tu rol.","ok",4000);
   });
+
+  // ── Recuperar contraseña ──
+  $("btnOlvidePass")?.addEventListener("click",e=>{
+    e.preventDefault();
+    const m=$("modalRecuperar"); if(m) m.style.display="flex";
+  });
+  const cerrarRec=()=>{ const m=$("modalRecuperar"); if(m) m.style.display="none"; };
+  $("cerrarRecuperar")?.addEventListener("click",cerrarRec);
+  $("cerrarRecuperar2")?.addEventListener("click",cerrarRec);
+  $("btnEnviarRecuperar")?.addEventListener("click",async()=>{
+    const username=$("recUsername")?.value.trim();
+    const msgEl=$("recMsg");
+    if(!username){ if(msgEl){msgEl.style.color="var(--red)";msgEl.textContent="Ingresa tu usuario.";} return; }
+    const usuario=STATE.usuarios.find(u=>u.username===username);
+    if(!usuario){ if(msgEl){msgEl.style.color="var(--red)";msgEl.textContent="Usuario no encontrado.";} return; }
+    if(!usuario.email){ if(msgEl){msgEl.style.color="var(--red)";msgEl.textContent="Sin correo registrado. Contacta al administrador.";} return; }
+    if(msgEl){msgEl.style.color="var(--accent)";msgEl.textContent="⏳ Enviando...";}
+    const btn=$("btnEnviarRecuperar"); if(btn) btn.disabled=true;
+    const result=await enviarEmailRestablecimiento(usuario);
+    if(btn) btn.disabled=false;
+    if(result.ok){ if(msgEl){msgEl.style.color="var(--green)";msgEl.textContent=`✅ Enviado a ${usuario.email}`;} setTimeout(cerrarRec,3000); }
+    else { if(msgEl){msgEl.style.color="var(--red)";msgEl.textContent=`❌ Error: ${result.error}`;} }
+  });
+
+  // ── Super Admin modal ──
+  $("btnLoginSA")?.addEventListener("click",e=>{
+    e.preventDefault();
+    const m=$("modalSA"); if(m) m.style.display="flex";
+  });
+  const cerrarSA=()=>{ const m=$("modalSA"); if(m) m.style.display="none"; };
+  $("cerrarSA")?.addEventListener("click",cerrarSA);
+  $("modalSA")?.addEventListener("click",e=>{ if(e.target.id==="modalSA") cerrarSA(); });
+  $("btnLoginSAConfirm")?.addEventListener("click",()=>{
+    const u=$("saUser")?.value.trim(), p=$("saPass")?.value;
+    if(u===SUPER_ADMIN.username&&p===SUPER_ADMIN.password){
+      STATE.isSuperAdmin=true; STATE.user={id:0,username:"superadmin",role:"superadmin",nombre:"Super Admin"};
+      sessionStorage.setItem("np_sa","1");
+      cerrarSA(); renderApp();
+    } else {
+      if($("saErr")){$("saErr").textContent="Credenciales incorrectas.";}
+    }
+  });
+  $("saPass")?.addEventListener("keypress",e=>{ if(e.key==="Enter") $("btnLoginSAConfirm")?.click(); });
+}
+
+
+
+// ════════════════════════════════════════════════════════════
+//  SUPER ADMIN PANEL
+// ════════════════════════════════════════════════════════════
+function buildSuperAdminPanel(){
+  return `
+  <div style="min-height:100vh;background:var(--bg);padding:2rem;font-family:var(--font)">
+    <div style="max-width:1100px;margin:0 auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2rem;flex-wrap:wrap;gap:1rem">
+        <div>
+          <div style="font-family:var(--font-display);font-size:1.8rem;font-weight:800;color:var(--accent)">⬡ NegocioPro</div>
+          <div style="font-size:.82rem;color:var(--text2)">Panel de Super Administración</div>
+        </div>
+        <div style="display:flex;gap:.5rem;align-items:center">
+          <button class="btn btn-ghost btn-sm" id="btnSATheme">◑ Tema</button>
+          <button class="btn btn-danger btn-sm" id="btnSALogout">Cerrar sesión SA</button>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="stats-grid" style="margin-bottom:1.5rem" id="saStats">
+        <div class="stat"><div class="stat-icon">🏢</div><div class="stat-label">Empresas activas</div><div class="stat-value c-accent" id="saNumEmpresas">...</div></div>
+        <div class="stat"><div class="stat-icon">👥</div><div class="stat-label">Total usuarios</div><div class="stat-value c-blue" id="saNumUsuarios">...</div></div>
+        <div class="stat"><div class="stat-icon">☁️</div><div class="stat-label">Firebase</div><div class="stat-value c-green" id="saFirebaseStatus">OK</div></div>
+      </div>
+
+      <!-- Crear empresa -->
+      <div class="card" style="margin-bottom:1.5rem">
+        <div class="card-title">🏢 Nueva Empresa</div>
+        <div class="form-grid">
+          <div class="fg span2"><label>Nombre de la empresa *</label><input id="saEmpNombre" placeholder="Ej: Salon Elegance, Ferretería Díaz..."></div>
+          <div class="fg"><label>Código de acceso *</label>
+            <div style="display:flex;gap:.5rem">
+              <input id="saEmpCodigo" placeholder="SALON01" style="text-transform:uppercase;letter-spacing:.1em;font-weight:700">
+              <button class="btn btn-ghost btn-sm" id="btnGenerarCodigo" style="white-space:nowrap">🎲 Auto</button>
+            </div>
+          </div>
+          <div class="fg"><label>Email del admin</label><input id="saEmpEmail" type="email" placeholder="admin@empresa.com"></div>
+          <div class="fg"><label>Tipo de negocio</label>
+            <select id="saEmpTipo">
+              <option value="barberia">💈 Barbería / Salón</option>
+              <option value="restaurante">🍽️ Restaurante / Cafetería</option>
+              <option value="tienda">🛒 Tienda / Retail</option>
+              <option value="servicios">🔧 Servicios Generales</option>
+              <option value="farmacia">💊 Farmacia</option>
+              <option value="gym">🏋️ Gimnasio / Fitness</option>
+              <option value="veterinaria">🐾 Veterinaria</option>
+              <option value="otro">📋 Otro</option>
+            </select>
+          </div>
+          <div class="fg"><label>Moneda</label>
+            <select id="saEmpMoneda">
+              <option value="$">$ Dólar (USD)</option>
+              <option value="Q">Q Quetzal (GTQ)</option>
+              <option value="C$">C$ Córdoba (NIO)</option>
+              <option value="L">L Lempira (HNL)</option>
+              <option value="₡">₡ Colón (CRC)</option>
+              <option value="B/.">B/. Balboa (PAB)</option>
+              <option value="€">€ Euro</option>
+              <option value="otro">Otra</option>
+            </select>
+          </div>
+          <div class="fg"><label>País</label>
+            <select id="saEmpPais">
+              <option value="SV">🇸🇻 El Salvador</option>
+              <option value="GT">🇬🇹 Guatemala</option>
+              <option value="HN">🇭🇳 Honduras</option>
+              <option value="NI">🇳🇮 Nicaragua</option>
+              <option value="CR">🇨🇷 Costa Rica</option>
+              <option value="PA">🇵🇦 Panamá</option>
+              <option value="MX">🇲🇽 México</option>
+              <option value="otro">Otro</option>
+            </select>
+          </div>
+          <div class="fg"><label>Plan</label>
+            <select id="saEmpPlan">
+              <option value="basico">🟢 Básico (Ventas, Caja, Clientes)</option>
+              <option value="estandar">🟡 Estándar (+ Inventario, Gastos, Agenda)</option>
+              <option value="completo">🟠 Completo (todos los módulos)</option>
+              <option value="personalizado">🔵 Personalizado</option>
+            </select>
+          </div>
+          <div class="fg"><label>Estado</label>
+            <select id="saEmpEstado">
+              <option value="activo">✅ Activo</option>
+              <option value="prueba">🔄 Período de prueba</option>
+              <option value="suspendido">⛔ Suspendido</option>
+            </select>
+          </div>
+          <div class="fg span2"><label>Notas internas</label><input id="saEmpNotas" placeholder="Observaciones, contacto, fecha de pago..."></div>
+          <div style="display:flex;align-items:flex-end">
+            <button class="btn btn-primary" id="btnCrearEmpresa">🏢 Crear empresa</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lista de empresas -->
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">
+          <div class="card-title" style="margin:0">📋 Empresas registradas</div>
+          <button class="btn btn-ghost btn-sm" id="btnRefreshEmpresas">🔄 Actualizar</button>
+        </div>
+        <div id="saListaEmpresas">
+          <div class="empty"><div class="empty-icon">🔄</div><p>Cargando empresas...</p></div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function attachSuperAdminEvents(){
+  $("btnSALogout")?.addEventListener("click",()=>{
+    STATE.isSuperAdmin=false; STATE.user=null;
+    sessionStorage.removeItem("np_sa"); sessionStorage.removeItem("np_session");
+    renderApp();
+  });
+  $("btnSATheme")?.addEventListener("click",()=>{ applyTheme(STATE.config.tema==="dark"?"light":"dark"); saveAll(); });
+
+  // Generar código automático
+  $("btnGenerarCodigo")?.addEventListener("click",()=>{
+    const nombre=$("saEmpNombre")?.value.trim();
+    const base=nombre?nombre.toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,5):"EMP";
+    const sufijo=Math.floor(Math.random()*900+100);
+    if($("saEmpCodigo")) $("saEmpCodigo").value=base+sufijo;
+  });
+
+  // Crear empresa
+  $("btnCrearEmpresa")?.addEventListener("click",async()=>{
+    const nombre=$("saEmpNombre")?.value.trim();
+    const codigo=($("saEmpCodigo")?.value||"").toUpperCase().trim();
+    const email=$("saEmpEmail")?.value.trim()||"";
+    if(!nombre||!codigo) return toast("⚠️ Nombre y código son requeridos","warn");
+    if(codigo.length<4) return toast("⚠️ El código debe tener al menos 4 caracteres","warn");
+
+    const btn=$("btnCrearEmpresa"); if(btn) btn.disabled=true;
+    toast("⏳ Creando empresa...","ok",2000);
+
+    // Obtener módulos según plan
+    const plan=$("saEmpPlan")?.value||"completo";
+    const modulosPorPlan={
+      basico:["ventas","caja","clientes","reportes"],
+      estandar:["ventas","caja","clientes","catalogo","gastos","agenda","reportes"],
+      completo:["dashboard","ventas","caja","clientes","catalogo","gastos","agenda","whatsapp","contabilidad","empleados","reportes","usuarios","sucursales","configuracion","roles"],
+      personalizado:["ventas","caja","clientes"]
+    };
+
+    const empresa={
+      id:codigo, nombre, emailAdmin:email,
+      tipo:$("saEmpTipo")?.value||"otro",
+      moneda:$("saEmpMoneda")?.value||"$",
+      pais:$("saEmpPais")?.value||"SV",
+      plan, modulos:modulosPorPlan[plan]||modulosPorPlan.completo,
+      estado:$("saEmpEstado")?.value||"activo",
+      notas:$("saEmpNotas")?.value||"",
+      fechaCreacion:today(), creadoPor:"superadmin"
+    };
+
+    try{
+      await inicializarEmpresaEnFirebase(empresa);
+      toast(`✅ Empresa "${nombre}" creada con código ${codigo}`,"ok",4000);
+      // Limpiar formulario
+      ["saEmpNombre","saEmpCodigo","saEmpEmail","saEmpNotas"].forEach(id=>{ const el=$(id); if(el) el.value=""; });
+      cargarListaEmpresas();
+    }catch(e){
+      toast(`❌ Error: ${e.message}`,"err",4000);
+    } finally {
+      if(btn) btn.disabled=false;
+    }
+  });
+
+  $("btnRefreshEmpresas")?.addEventListener("click",()=>cargarListaEmpresas());
+  cargarListaEmpresas();
+}
+
+async function cargarListaEmpresas(){
+  const container=$("saListaEmpresas"); if(!container) return;
+  container.innerHTML=`<div class="empty"><p>🔄 Cargando...</p></div>`;
+  const empresas=await fbLoadEmpresas();
+
+  // Actualizar stats
+  const saNum=$("saNumEmpresas"); if(saNum) saNum.textContent=empresas.length;
+
+  if(!empresas.length){
+    container.innerHTML=`<div class="empty"><div class="empty-icon">🏢</div><p>Sin empresas registradas. Crea la primera.</p></div>`;
+    return;
+  }
+
+  const estadoBadge={activo:"bg-green",prueba:"bg-accent",suspendido:"bg-red"};
+  const planBadge={basico:"bg-gray",estandar:"bg-blue",completo:"bg-green",personalizado:"bg-purple"};
+
+  container.innerHTML=`<div class="table-wrap"><table>
+    <thead><tr><th>Código</th><th>Empresa</th><th>Tipo</th><th>Plan</th><th>País</th><th>Estado</th><th>Creada</th><th>Acciones</th></tr></thead>
+    <tbody>
+    ${empresas.map(e=>`<tr>
+      <td><span style="font-family:var(--mono);font-weight:700;font-size:.9rem;color:var(--accent)">${e.id||e._id||"?"}</span></td>
+      <td><strong>${e.nombre||"—"}</strong>${e.emailAdmin?`<br><span style="font-size:.72rem;color:var(--text2)">${e.emailAdmin}</span>`:""}</td>
+      <td><span style="font-size:.78rem">${e.tipo||"—"}</span></td>
+      <td><span class="badge ${planBadge[e.plan]||"bg-gray"}">${e.plan||"—"}</span></td>
+      <td>${e.pais||"—"}</td>
+      <td><span class="badge ${estadoBadge[e.estado]||"bg-gray"}">${e.estado||"activo"}</span></td>
+      <td style="font-size:.75rem;color:var(--text2)">${e.fechaCreacion||"—"}</td>
+      <td style="display:flex;gap:.3rem;flex-wrap:wrap">
+        <button class="icon-btn sa-entrar" data-id="${e.id||e._id}" title="Entrar como esta empresa">👁️</button>
+        <button class="icon-btn sa-suspender" data-id="${e.id||e._id}" data-estado="${e.estado}" title="Cambiar estado">
+          ${e.estado==="suspendido"?"✅":"⛔"}
+        </button>
+        <button class="icon-btn sa-del" data-id="${e.id||e._id}" title="Eliminar empresa" style="color:var(--red)">🗑️</button>
+      </td>
+    </tr>`).join("")}
+    </tbody>
+  </table></div>`;
+
+  // Eventos de la tabla
+  $$(".sa-entrar").forEach(b=>b.addEventListener("click",async()=>{
+    const id=b.dataset.id;
+    const emp=empresas.find(e=>(e.id||e._id)===id);
+    if(!emp) return;
+    STATE.empresaActual={...emp,id};
+    STATE.isSuperAdmin=false;
+    sessionStorage.removeItem("np_sa");
+    sessionStorage.setItem("np_empresa",JSON.stringify(STATE.empresaActual));
+    // Cargar datos de esa empresa
+    await loadFromFirebase();
+    renderApp();
+    toast(`👁️ Viendo empresa: ${emp.nombre}`,"ok");
+  }));
+
+  $$(".sa-suspender").forEach(b=>b.addEventListener("click",async()=>{
+    const id=b.dataset.id;
+    const emp=empresas.find(e=>(e.id||e._id)===id);
+    if(!emp) return;
+    const nuevoEstado=emp.estado==="suspendido"?"activo":"suspendido";
+    if(!confirm2(`¿Cambiar estado de "${emp.nombre}" a ${nuevoEstado}?`)) return;
+    await FB.setSA("empresa_"+id,{...emp,estado:nuevoEstado});
+    toast(`✅ Estado actualizado: ${nuevoEstado}`,"ok");
+    cargarListaEmpresas();
+  }));
+
+  $$(".sa-del").forEach(b=>b.addEventListener("click",async()=>{
+    const id=b.dataset.id;
+    const emp=empresas.find(e=>(e.id||e._id)===id);
+    if(!emp) return;
+    if(!confirm2(`⚠️ ¿Eliminar PERMANENTEMENTE la empresa "${emp.nombre}" y TODOS sus datos? Esta acción no se puede deshacer.`)) return;
+    if(!confirm2(`Confirma una vez más: ¿Eliminar "${emp.nombre}"?`)) return;
+    await FB.setSA("empresa_"+id,{...emp,estado:"eliminado",eliminado:true,fechaEliminacion:today()});
+    LS.clearEmpresa(id);
+    toast(`🗑️ Empresa eliminada`,"ok");
+    cargarListaEmpresas();
+  }));
 }
 
 // ════════════════════════════════════════════════════════════
 //  LAYOUT
 // ════════════════════════════════════════════════════════════
 function buildLayout(){
-  const isAdmin = STATE.user.role==="admin";
   const sbw = stockBajo().length;
-  const navGroups = [
-    { label:"Principal", items:[
-      isAdmin&&{tab:"dashboard",icon:"◈",label:"Dashboard"},
-      {tab:"ventas",icon:"◎",label:"Ventas"},
-      {tab:"caja",icon:"▣",label:"Caja"},
-    ].filter(Boolean)},
-    isAdmin&&{ label:"Gestión", items:[
-      {tab:"clientes",icon:"◉",label:"Clientes"},
-      {tab:"catalogo",icon:"◧",label:"Catálogo",badge:sbw>0?sbw:null},
-      {tab:"gastos",icon:"◫",label:"Gastos"},
-      {tab:"agenda",icon:"◷",label:"Agenda"},
-      {tab:"whatsapp",icon:"💬",label:"WhatsApp"},
-    ]},
-    isAdmin&&{ label:"Finanzas", items:[
-      {tab:"contabilidad",icon:"◈",label:"Contabilidad"},
-      {tab:"empleados",icon:"◎",label:"Empleados"},
-      {tab:"reportes",icon:"◉",label:"Reportes"},
-    ]},
-    isAdmin&&{ label:"Sistema", items:[
-      {tab:"usuarios",icon:"◫",label:"Usuarios"},
-      {tab:"sucursales",icon:"◧",label:"Sucursales"},
-      {tab:"configuracion",icon:"◷",label:"Configuración"},
-    ]},
-  ].filter(Boolean);
+  const rol = getRolActual();
+
+  // Módulos disponibles con metadata
+  const MODS = {
+    dashboard:    {icon:"◈",label:"Dashboard",     grupo:"Principal"},
+    ventas:       {icon:"◎",label:"Ventas",         grupo:"Principal"},
+    caja:         {icon:"▣",label:"Caja",           grupo:"Principal"},
+    clientes:     {icon:"◉",label:"Clientes",       grupo:"Gestión"},
+    catalogo:     {icon:"◧",label:"Catálogo",       grupo:"Gestión",badge:sbw>0?sbw:null},
+    gastos:       {icon:"◫",label:"Gastos",         grupo:"Gestión"},
+    agenda:       {icon:"◷",label:"Agenda",         grupo:"Gestión"},
+    whatsapp:     {icon:"💬",label:"WhatsApp",       grupo:"Gestión"},
+    contabilidad: {icon:"◈",label:"Contabilidad",   grupo:"Finanzas"},
+    empleados:    {icon:"◎",label:"Empleados",      grupo:"Finanzas"},
+    reportes:     {icon:"◉",label:"Reportes",       grupo:"Finanzas"},
+    usuarios:     {icon:"◫",label:"Usuarios",       grupo:"Sistema"},
+    roles:        {icon:"🔐",label:"Roles",          grupo:"Sistema"},
+    sucursales:   {icon:"◧",label:"Sucursales",     grupo:"Sistema"},
+    configuracion:{icon:"◷",label:"Configuración",  grupo:"Sistema"},
+  };
+
+  // Construir sidebar filtrado por permisos del rol actual
+  const grupos={"Principal":[],"Gestión":[],"Finanzas":[],"Sistema":[]};
+  Object.entries(MODS).forEach(([tab,info])=>{
+    if(tienePermiso(tab)||(tab==="roles"&&rol?.esAdmin)){
+      grupos[info.grupo].push({tab,...info});
+    }
+  });
+  const navGroups=Object.entries(grupos)
+    .filter(([,items])=>items.length>0)
+    .map(([label,items])=>({label,items}));
 
   const navHTML = navGroups.map(g=>`
     <div class="sidebar-section">${g.label}</div>
@@ -952,7 +1656,13 @@ window.addEventListener("appinstalled", ()=>{
 function attachLayoutEvents(){
   applySyncIndicator(); // restaurar estado de sync apenas aparece el sidebar
   $$(".nav-btn[data-tab]").forEach(b=>b.addEventListener("click",()=>{ closeSidebar(); goTab(b.dataset.tab); }));
-  $("btnLogout")?.addEventListener("click",()=>{ STATE.user=null; if(_bkTimer) clearInterval(_bkTimer); renderApp(); });
+  $("btnLogout")?.addEventListener("click",()=>{
+    STATE.user=null;
+    sessionStorage.removeItem("np_session");
+    if(_bkTimer) clearInterval(_bkTimer);
+    // Mantener la empresa activa para no tener que re-ingresar el código
+    renderApp();
+  });
   $("btnTheme")?.addEventListener("click",()=>{ applyTheme(STATE.config.tema==="dark"?"light":"dark"); saveAll(); });
   $("btnInstalarPWA")?.addEventListener("click",async()=>{
     if(_pwaInstallPrompt){
@@ -980,7 +1690,7 @@ function goTab(tab){
     clientes:renderClientes, catalogo:renderCatalogo, gastos:renderGastos,
     agenda:renderAgenda, contabilidad:renderContabilidad, empleados:renderEmpleados,
     reportes:renderReportes, usuarios:renderUsuarios, sucursales:renderSucursales,
-    configuracion:renderConfiguracion, whatsapp:renderRecordatorios
+    configuracion:renderConfiguracion, whatsapp:renderRecordatorios, roles:renderRoles
   };
   mc.innerHTML = renders[tab] ? renders[tab]() : `<div class="empty"><div class="empty-icon">🚧</div><p>Módulo en construcción</p></div>`;
   attachTabEvents(tab);
@@ -1111,7 +1821,8 @@ function renderVentas(){
     ?STATE.productos.map(p=>{const stk=getStock(p.id);const stklbl=stk!==null?` (stock:${stk})`:"";return `<option value="${p.id}">${p.nombre}${stklbl} — ${fmtMoney(p.precio)}</option>`;}).join("")
     :`<option value="">Sin productos</option>`;
   const optsClientes=`<option value="">Sin cliente asignar</option>`+STATE.clientes.map(c=>`<option value="${c.id}">${c.nombre}</option>`).join("");
-  const optsEmpleados=STATE.usuarios.map(u=>`<option value="${u.id}">${u.nombre||u.username}</option>`).join("");
+  // Pre-seleccionar el empleado logueado por defecto
+  const optsEmpleados=STATE.usuarios.map(u=>`<option value="${u.id}" ${u.id===STATE.user.id?"selected":""}>${u.nombre||u.username}</option>`).join("");
 
   // Historial agrupado por visitaId
   const visitas={};
@@ -1842,26 +2553,168 @@ function renderReportes(){
 // ════════════════════════════════════════════════════════════
 //  USUARIOS
 // ════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+//  ROLES
+// ════════════════════════════════════════════════════════════
+function renderRoles(){
+  const MODULOS_INFO = {
+    dashboard:"📊 Dashboard", ventas:"💰 Ventas", caja:"▣ Caja",
+    clientes:"◉ Clientes", catalogo:"◧ Catálogo", gastos:"◫ Gastos",
+    agenda:"◷ Agenda", whatsapp:"💬 WhatsApp", contabilidad:"◈ Contabilidad",
+    empleados:"◎ Empleados", reportes:"◉ Reportes",
+    usuarios:"◫ Usuarios", sucursales:"◧ Sucursales", configuracion:"◷ Configuración"
+  };
+
+  const filasRoles = STATE.roles.map(r=>`
+    <div class="card" style="border-left:4px solid var(--${r.color||"blue"});margin-bottom:.75rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
+        <div>
+          <strong style="font-size:1rem">${r.nombre}</strong>
+          ${r.esAdmin?`<span class="badge bg-purple" style="margin-left:.5rem">Admin total</span>`:""}
+        </div>
+        <div style="display:flex;gap:.3rem">
+          ${!r.esAdmin?`<button class="icon-btn" data-action="editRol" data-id="${r.id}">✏️</button>`:""}
+          ${!r.esAdmin?`<button class="icon-btn" data-action="delRol" data-id="${r.id}">🗑️</button>`:`<span style="font-size:.72rem;color:var(--text2)">No editable</span>`}
+        </div>
+      </div>
+      ${!r.esAdmin?`<div style="display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.65rem">
+        ${Object.entries(MODULOS_INFO).map(([mod,label])=>`
+          <span class="badge ${(r.modulos||[]).includes(mod)?"bg-green":"bg-gray"}" style="font-size:.68rem">
+            ${(r.modulos||[]).includes(mod)?"✓":"✗"} ${label}
+          </span>`).join("")}
+      </div>`:`<div style="font-size:.78rem;color:var(--text2);margin-top:.5rem">Acceso completo a todos los módulos</div>`}
+      <div style="font-size:.72rem;color:var(--text2);margin-top:.5rem">
+        Usuarios con este rol: <strong>${STATE.usuarios.filter(u=>u.role.toLowerCase()===r.nombre.toLowerCase()||u.role===r.id).length}</strong>
+      </div>
+    </div>
+  `).join("");
+
+  return `<div class="page-header"><div class="page-title">🔐 Gestión de Roles</div>
+    <button class="btn btn-primary" id="btnNuevoRol">+ Nuevo Rol</button>
+  </div>
+  <div class="alert alert-warning">
+    ⚠️ Los roles definen qué módulos puede ver cada empleado. El rol <strong>Administrador</strong> siempre tiene acceso total y no se puede modificar.
+  </div>
+
+  <div id="formRol" style="display:none">
+    <div class="card">
+      <div class="card-title" id="formRolTitle">Nuevo Rol</div>
+      <div class="form-grid" style="margin-bottom:1rem">
+        <div class="fg span2"><label>Nombre del rol *</label><input id="rolNombre" placeholder="Ej: Barbero Senior, Recepcionista..."></div>
+        <div class="fg"><label>Color identificador</label>
+          <select id="rolColor">
+            <option value="blue">🔵 Azul</option>
+            <option value="green">🟢 Verde</option>
+            <option value="accent">🟡 Dorado</option>
+            <option value="purple">🟣 Morado</option>
+            <option value="red">🔴 Rojo</option>
+          </select>
+        </div>
+        <input type="hidden" id="rolEditId">
+      </div>
+      <div class="card-title" style="margin-bottom:.75rem">Módulos permitidos</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.5rem;margin-bottom:1rem">
+        ${Object.entries(MODULOS_INFO).map(([mod,label])=>`
+          <label style="display:flex;align-items:center;gap:.5rem;padding:.4rem;background:var(--surface2);border-radius:var(--r);cursor:pointer;font-size:.83rem">
+            <input type="checkbox" class="rol-mod-check" value="${mod}" style="width:auto;font-size:inherit">
+            ${label}
+          </label>`).join("")}
+      </div>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-primary" id="btnGuardarRol">Guardar rol</button>
+        <button class="btn btn-ghost" id="btnCancelarRol">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="listaRoles">${filasRoles}</div>`;
+}
+
+function attachRolesEvents(){
+  const showForm=(show=true,id=null)=>{
+    const f=$("formRol"); if(f) f.style.display=show?"block":"none";
+    if(!show) return;
+    // Limpiar
+    $("rolNombre").value=""; $("rolColor").value="blue"; $("rolEditId").value="";
+    $$(".rol-mod-check").forEach(c=>c.checked=false);
+    if(id){
+      const rol=STATE.roles.find(r=>r.id===id); if(!rol) return;
+      $("formRolTitle").textContent="Editar Rol";
+      $("rolNombre").value=rol.nombre; $("rolColor").value=rol.color||"blue"; $("rolEditId").value=id;
+      $$(".rol-mod-check").forEach(c=>c.checked=(rol.modulos||[]).includes(c.value));
+    } else {
+      $("formRolTitle").textContent="Nuevo Rol";
+    }
+    f.scrollIntoView({behavior:"smooth"});
+  };
+
+  $("btnNuevoRol")?.addEventListener("click",()=>showForm(true));
+  $("btnCancelarRol")?.addEventListener("click",()=>showForm(false));
+
+  $("btnGuardarRol")?.addEventListener("click",()=>{
+    const nombre=$("rolNombre")?.value.trim();
+    if(!nombre) return toast("⚠️ Ingresa un nombre para el rol","warn");
+    const modulos=[...$$("#formRol .rol-mod-check")].filter(c=>c.checked).map(c=>c.value);
+    if(!modulos.length) return toast("⚠️ Selecciona al menos un módulo","warn");
+    const color=$("rolColor")?.value||"blue";
+    const editId=$("rolEditId")?.value;
+    if(editId){
+      const rol=STATE.roles.find(r=>r.id===editId);
+      if(rol){ rol.nombre=nombre; rol.modulos=modulos; rol.color=color; }
+    } else {
+      STATE.roles.push({id:"r"+Date.now(),nombre,modulos,color,esAdmin:false});
+    }
+    saveAll(); fbSave("roles",STATE.roles);
+    toast("✅ Rol guardado","ok"); goTab("roles");
+  });
+
+  $$("[data-action='editRol']").forEach(b=>b.addEventListener("click",()=>showForm(true,b.dataset.id)));
+
+  $$("[data-action='delRol']").forEach(b=>b.addEventListener("click",()=>{
+    const id=b.dataset.id;
+    const usandoRol=STATE.usuarios.filter(u=>u.role===STATE.roles.find(r=>r.id===id)?.nombre);
+    if(usandoRol.length>0) return toast(`⚠️ ${usandoRol.length} usuario(s) tienen este rol. Reasígnalos primero.`,"err",4000);
+    if(confirm2("¿Eliminar este rol?")){
+      STATE.roles=STATE.roles.filter(r=>r.id!==id);
+      saveAll(); fbSave("roles",STATE.roles);
+      toast("🗑️ Rol eliminado"); goTab("roles");
+    }
+  }));
+}
+
 function renderUsuarios(){
-  const filas=STATE.usuarios.map(u=>`<tr>
-    <td><strong>${u.nombre||u.username}</strong></td>
-    <td class="amt">${u.username}</td>
-    <td><span class="badge ${u.role==="admin"?"bg-purple":"bg-blue"}">${u.role}</span></td>
-    <td class="amt">${u.comision||0}%</td>
-    <td>${u.id!==STATE.user.id?`<button class="icon-btn" data-action="delUser" data-id="${u.id}">🗑️</button>`:`<span style="font-size:.72rem;color:var(--text3)">(tú)</span>`}</td>
-  </tr>`).join("");
+  // Opciones de roles disponibles (excluyendo admin que se asigna solo internamente)
+  const optsRoles = STATE.roles.map(r=>`<option value="${r.nombre}">${r.nombre}</option>`).join("");
+
+  const filas=STATE.usuarios.map(u=>{
+    const rolColor=STATE.roles.find(r=>r.nombre.toLowerCase()===u.role.toLowerCase())?.color||"blue";
+    return `<tr>
+      <td><strong>${u.nombre||u.username}</strong></td>
+      <td class="amt">${u.username}</td>
+      <td>${u.email||`<span style="color:var(--text3);font-size:.75rem">Sin correo</span>`}</td>
+      <td><span class="badge bg-${rolColor}">${u.role}</span></td>
+      <td class="amt">${u.comision||0}%</td>
+      <td style="display:flex;gap:.3rem;flex-wrap:wrap">
+        <button class="icon-btn" data-action="editUser" data-id="${u.id}" title="Editar">✏️</button>
+        ${u.email?`<button class="icon-btn" data-action="resetPass" data-id="${u.id}" title="Resetear contraseña">🔑</button>`:""}
+        ${u.id!==STATE.user.id?`<button class="icon-btn" data-action="delUser" data-id="${u.id}" title="Eliminar">🗑️</button>`:`<span style="font-size:.72rem;color:var(--text3)">(tú)</span>`}
+      </td>
+    </tr>`;
+  }).join("");
 
   return `<div class="page-header"><div class="page-title">◫ Usuarios</div>
     <button class="btn btn-primary" id="btnNuevoUser">+ Nuevo Usuario</button>
   </div>
   <div class="card" id="formUser" style="display:none">
-    <div class="card-title">Nuevo Usuario</div>
+    <div class="card-title" id="formUserTitle">Nuevo Usuario</div>
     <div class="form-grid">
       <div class="fg"><label>Nombre completo</label><input id="uNombre" placeholder="Juan Pérez"></div>
       <div class="fg"><label>Usuario (login)</label><input id="uUser" placeholder="juan123"></div>
       <div class="fg"><label>Contraseña</label><input id="uPass" type="password" placeholder="contraseña"></div>
-      <div class="fg"><label>Rol</label><select id="uRole"><option value="empleado">Empleado</option><option value="admin">Admin</option></select></div>
+      <div class="fg"><label>Correo de recuperación</label><input id="uEmail" type="email" placeholder="correo@ejemplo.com"></div>
+      <div class="fg"><label>Rol</label><select id="uRole">${optsRoles}</select></div>
       <div class="fg"><label>Comisión %</label><input id="uComision" type="number" value="0" min="0" max="100"></div>
+      <input type="hidden" id="uEditId">
       <div style="display:flex;gap:.5rem;align-items:flex-end">
         <button class="btn btn-primary" id="btnGuardarUser">Guardar</button>
         <button class="btn btn-ghost" id="btnCancelarUser">Cancelar</button>
@@ -1869,8 +2722,10 @@ function renderUsuarios(){
     </div>
   </div>
   <div class="card"><div class="card-title">Usuarios del sistema (${STATE.usuarios.length})</div>
-  <div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Comisión</th><th></th></tr></thead>
-  <tbody>${filas}</tbody></table></div></div>`;
+  <div class="table-wrap"><table>
+    <thead><tr><th>Nombre</th><th>Usuario</th><th>Correo</th><th>Rol</th><th>Comisión</th><th>Acciones</th></tr></thead>
+    <tbody>${filas}</tbody>
+  </table></div></div>`;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -2143,6 +2998,7 @@ function attachTabEvents(tab){
   else if(tab==="usuarios") attachUsuariosEvents();
   else if(tab==="sucursales") attachSucursalesEvents();
   else if(tab==="configuracion") attachConfigEvents();
+  else if(tab==="roles") attachRolesEvents();
 }
 
 // ── CAJA ──
@@ -2305,7 +3161,8 @@ function attachVentasEvents(){
     const correlativo=generarCorrelativo();
     saveAll(); // guardar correlativo actualizado
     const nuevosIds=[];
-    const empId=emp?parseInt(emp):null;
+    // Si no se seleccionó empleado específico, asignar al usuario logueado
+    const empId=emp?parseInt(emp):STATE.user.id;
     STATE._items.forEach(it=>{
       const sub=it.precio*it.cant-(it.desc||0);
       const iva=sub*(STATE.config.ivaPct||0)/100;
@@ -2875,21 +3732,73 @@ function attachEmpleadosEvents(){
 
 // ── USUARIOS ──
 function attachUsuariosEvents(){
-  const showForm=(s=true)=>{ const f=$("formUser"); if(f) f.style.display=s?"block":"none"; };
-  $("btnNuevoUser")?.addEventListener("click",()=>showForm());
+  const showForm=(show=true,userId=null)=>{
+    const f=$("formUser"); if(f) f.style.display=show?"block":"none";
+    if(!show) return;
+    if(userId){
+      const u=STATE.usuarios.find(x=>x.id===userId); if(!u) return;
+      $("formUserTitle").textContent="Editar Usuario";
+      $("uNombre").value=u.nombre||""; $("uUser").value=u.username;
+      $("uPass").value=""; // no mostrar contraseña actual
+      $("uEmail").value=u.email||""; $("uRole").value=u.role;
+      $("uComision").value=u.comision||0; $("uEditId").value=u.id;
+    } else {
+      $("formUserTitle").textContent="Nuevo Usuario";
+      ["uNombre","uUser","uPass","uEmail","uComision"].forEach(id=>{ const el=$(id); if(el) el.value=id==="uComision"?"0":""; });
+      $("uEditId").value="";
+    }
+    f.scrollIntoView({behavior:"smooth"});
+  };
+
+  $("btnNuevoUser")?.addEventListener("click",()=>showForm(true));
   $("btnCancelarUser")?.addEventListener("click",()=>showForm(false));
+
   $("btnGuardarUser")?.addEventListener("click",()=>{
-    const username=$("uUser")?.value.trim(), password=$("uPass")?.value;
+    const username=$("uUser")?.value.trim();
+    const password=$("uPass")?.value;
     const nombre=$("uNombre")?.value.trim()||username;
-    if(!username||!password) return toast("⚠️ Usuario y contraseña requeridos","warn");
-    if(STATE.usuarios.find(u=>u.username===username)) return toast("⚠️ Usuario ya existe","err");
-    STATE.usuarios.push({id:uid("u"),username,password,nombre,role:$("uRole").value,comision:parseFloat($("uComision")?.value)||0,sucursalId:null});
-    saveAll(); toast("✅ Usuario creado","ok"); goTab("usuarios");
+    const email=$("uEmail")?.value.trim()||"";
+    const role=$("uRole")?.value||"Empleado";
+    const comision=parseFloat($("uComision")?.value)||0;
+    const editId=parseInt($("uEditId")?.value);
+
+    if(!username) return toast("⚠️ El nombre de usuario es requerido","warn");
+
+    if(editId){
+      // Editar usuario existente
+      const u=STATE.usuarios.find(x=>x.id===editId);
+      if(!u) return;
+      u.nombre=nombre; u.email=email; u.role=role; u.comision=comision;
+      if(password) u.password=password; // solo cambiar si se ingresó nueva
+      saveAll(); fbSave("usuarios",STATE.usuarios);
+      toast("✅ Usuario actualizado","ok"); goTab("usuarios");
+    } else {
+      // Nuevo usuario
+      if(!password) return toast("⚠️ La contraseña es requerida","warn");
+      if(STATE.usuarios.find(u=>u.username===username)) return toast("⚠️ Ese usuario ya existe","err");
+      STATE.usuarios.push({id:uid("u"),username,password,nombre,email,role,comision,sucursalId:null});
+      saveAll(); fbSave("usuarios",STATE.usuarios);
+      toast("✅ Usuario creado","ok"); goTab("usuarios");
+    }
   });
+
+  $$("[data-action='editUser']").forEach(b=>b.addEventListener("click",()=>showForm(true,parseInt(b.dataset.id))));
+
+  $$("[data-action='resetPass']").forEach(b=>b.addEventListener("click",async()=>{
+    const u=STATE.usuarios.find(x=>x.id===parseInt(b.dataset.id));
+    if(!u||!u.email) return toast("⚠️ Sin correo registrado","warn");
+    if(!confirm2(`¿Enviar nueva contraseña temporal a ${u.email}?`)) return;
+    toast("⏳ Enviando correo...","ok",2000);
+    const result=await enviarEmailRestablecimiento(u);
+    if(result.ok) toast(`✅ Nueva contraseña enviada a ${u.email}`,"ok",4000);
+    else toast(`❌ Error: ${result.error}`,"err",4000);
+    goTab("usuarios");
+  }));
+
   $$("[data-action='delUser']").forEach(b=>b.addEventListener("click",()=>{
     const id=parseInt(b.dataset.id);
     if(id===STATE.user.id) return toast("⚠️ No puedes eliminarte","warn");
-    if(confirm2("¿Eliminar usuario?")){ STATE.usuarios=STATE.usuarios.filter(u=>u.id!==id); saveAll(); toast("🗑️ Eliminado"); goTab("usuarios"); }
+    if(confirm2("¿Eliminar usuario?")){ STATE.usuarios=STATE.usuarios.filter(u=>u.id!==id); saveAll(); fbSave("usuarios",STATE.usuarios); toast("🗑️ Eliminado"); goTab("usuarios"); }
   }));
 }
 
