@@ -408,7 +408,8 @@ const STATE = {
     paypalEmail:"", paypalNombre:"",
     // EmailJS para restablecimiento de contraseña
     emailjsServiceId:"service_jnf9wlw",
-    emailjsTemplateId:"template_lldrchc",
+    emailjsTemplateId:"template_lldrchc",      // bienvenida nueva empresa / admin
+    emailjsTemplateResetId:"template_2mv7zaa", // reseteo de contraseña
     emailjsPublicKey:"FY1omx8_ANjS7cQ1i",
     adminEmail:"willvillanueva555@gmail.com"
   },
@@ -675,6 +676,7 @@ const CONFIG_DEFAULT_EMPRESA = {
   modoContribuyente:"consumidor_final", paypalEmail:"", paypalNombre:"",
   emailjsServiceId:"service_jnf9wlw",
   emailjsTemplateId:"template_lldrchc",
+  emailjsTemplateResetId:"template_2mv7zaa",
   emailjsPublicKey:"FY1omx8_ANjS7cQ1i",
   adminEmail:"willvillanueva555@gmail.com"
 };
@@ -813,21 +815,51 @@ function generarPasswordTemporal(){
   return pass;
 }
 
+async function enviarEmailBienvenidaEmpresa(empresa){
+  if(!empresa.emailAdmin) return {ok:false, error:"Sin correo del administrador"};
+  try{
+    initEmailJS();
+    if(typeof emailjs==="undefined") throw new Error("EmailJS no disponible");
+    const params={
+      email:       empresa.emailAdmin,   // campo que usa EmailJS como destinatario
+      to_email:    empresa.emailAdmin,   // por si acaso
+      nombre:      "Administrador",
+      negocio:     empresa.nombre,
+      codigo_empresa: empresa.id,
+      username:    "admin",
+      nueva_password: "admin123",
+      url_sistema: window.location.origin + window.location.pathname,
+      tipo_negocio: empresa.tipo||"negocio",
+      plan:        empresa.plan||""
+    };
+    await emailjs.send(
+      STATE.config.emailjsServiceId||"service_jnf9wlw",
+      STATE.config.emailjsTemplateId||"template_lldrchc",
+      params
+    );
+    return {ok:true};
+  }catch(e){
+    console.error("EmailJS bienvenida error:", e);
+    return {ok:false, error:e.message};
+  }
+}
+
 async function enviarEmailRestablecimiento(usuario){
   try{
     initEmailJS();
     if(typeof emailjs==="undefined") throw new Error("EmailJS no disponible");
     const nuevaPass=generarPasswordTemporal();
     const params={
-      negocio: STATE.config.nombreNegocio||"NegocioPro",
-      nombre: usuario.nombre||usuario.username,
-      nueva_password: nuevaPass,
+      email:    usuario.email,           // campo destinatario EmailJS
       to_email: usuario.email,
+      negocio:  STATE.config.nombreNegocio||"NegocioPro",
+      nombre:   usuario.nombre||usuario.username,
+      nueva_password: nuevaPass,
       username: usuario.username
     };
     await emailjs.send(
       STATE.config.emailjsServiceId||"service_jnf9wlw",
-      STATE.config.emailjsTemplateId||"template_lldrchc",
+      STATE.config.emailjsTemplateResetId||"template_2mv7zaa", // plantilla de reseteo
       params
     );
     // Actualizar contraseña en el sistema
@@ -1704,7 +1736,10 @@ let _saTabActual = "empresas";
 function attachSuperAdminEvents(){
   $("btnSALogout")?.addEventListener("click",()=>{
     STATE.isSuperAdmin=false; STATE.user=null;
-    sessionStorage.removeItem("np_sa"); sessionStorage.removeItem("np_session");
+    sessionStorage.removeItem("np_sa");
+    sessionStorage.removeItem("np_session");
+    sessionStorage.removeItem("np_sa_prev");
+    sessionStorage.removeItem("np_empresa");
     renderApp();
   });
   $("btnSATheme")?.addEventListener("click",()=>{ applyTheme(STATE.config.tema==="dark"?"light":"dark"); });
@@ -1793,6 +1828,18 @@ function attachSAEmpresasEvents(){
       await inicializarEmpresaEnFirebase(empresa);
       _saEmpresas.push(empresa);
       toast(`✅ Empresa "${nombre}" creada — Código: ${codigo}`,"ok",5000);
+
+      // Enviar correo de bienvenida al admin de la empresa
+      if(empresa.emailAdmin){
+        toast("📧 Enviando correo de acceso...","ok",2000);
+        const mailResult = await enviarEmailBienvenidaEmpresa(empresa);
+        if(mailResult.ok){
+          toast(`📧 Correo enviado a ${empresa.emailAdmin}`,"ok",4000);
+        } else {
+          toast(`⚠️ Empresa creada pero el correo falló: ${mailResult.error}`,"warn",5000);
+        }
+      }
+
       ["saEmpNombre","saEmpCodigo","saEmpEmail","saEmpNotas","saEmpDescuento"].forEach(id=>{const el=$(id);if(el)el.value="";});
       actualizarSAStats(); renderSATab();
     }catch(e){ toast(`❌ ${e.message}`,"err",4000); }
@@ -1808,9 +1855,10 @@ function attachSAEmpresasEvents(){
     STATE.empresaActual={...emp,id:b.dataset.id};
     STATE.isSuperAdmin=false;
     sessionStorage.removeItem("np_sa");
+    sessionStorage.setItem("np_sa_prev","1"); // marcar que vino del SA
     sessionStorage.setItem("np_empresa",JSON.stringify(STATE.empresaActual));
     await loadFromFirebase(); renderApp();
-    toast(`👁️ Viendo: ${emp.nombre}`,"ok");
+    toast(`👁️ Viendo: ${emp.nombre} — Usa "Volver a Super Admin" para regresar`,"ok",4000);
   }));
 
   $$(".sa-editar").forEach(b=>b.addEventListener("click",()=>{
@@ -2297,6 +2345,7 @@ function buildLayout(){
         <div style="padding:.3rem .75rem;font-size:.72rem;font-weight:600" id="syncIndicator">☁️ Nube OK</div>
         <button class="nav-btn" id="btnInstalarPWA" style="display:none"><span class="nav-icon">📲</span>Instalar app</button>
         <button class="nav-btn" id="btnTheme"><span class="nav-icon">◑</span>Cambiar tema</button>
+        ${sessionStorage.getItem("np_sa_prev")==="1"?`<button class="nav-btn" id="btnVolverSA" style="color:var(--accent);border-top:1px solid var(--border);margin-top:.25rem"><span class="nav-icon">⬡</span>Volver a Super Admin</button>`:""}
         <button class="nav-btn" id="btnLogout" style="color:var(--red)"><span class="nav-icon">⏻</span>Cerrar sesión</button>
       </div>
     </aside>
@@ -2327,6 +2376,22 @@ function attachLayoutEvents(){
     sessionStorage.removeItem("np_session");
     if(_bkTimer) clearInterval(_bkTimer);
     // Mantener la empresa activa para no tener que re-ingresar el código
+    renderApp();
+  });
+
+  // Botón volver al Super Admin (si entró desde SA)
+  $("btnVolverSA")?.addEventListener("click",()=>{
+    STATE.isSuperAdmin=true;
+    STATE.user=null;
+    STATE.empresaActual=null;
+    sessionStorage.setItem("np_sa","1");
+    sessionStorage.removeItem("np_session");
+    sessionStorage.removeItem("np_empresa");
+    sessionStorage.removeItem("np_sa_prev");
+    // Limpiar datos de empresa anterior del STATE
+    STATE.usuarios=[]; STATE.productos=[]; STATE.ingresos=[];
+    STATE.gastos=[]; STATE.clientes=[]; STATE.citas=[];
+    STATE.cajas=[]; STATE.sucursales=[]; STATE.roles=[];
     renderApp();
   });
   $("btnTheme")?.addEventListener("click",()=>{ applyTheme(STATE.config.tema==="dark"?"light":"dark"); saveAll(); });
