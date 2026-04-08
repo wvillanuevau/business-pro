@@ -556,7 +556,10 @@ async function fbSaveEmpresa(empresa){
 async function fbLoadEmpresas(){
   try{
     const docs = await FB.list("superadmin");
-    return docs.filter(d=>d._id.startsWith("empresa_")).map(d=>({...d, id:d._id.replace("empresa_","")}));
+    return docs
+      .filter(d=>d._id.startsWith("empresa_"))
+      .map(d=>({...d, id:d._id.replace("empresa_","")}))
+      .filter(d=>!d.eliminado); // excluir eliminadas permanentemente
   }catch(e){ console.warn("fbLoadEmpresas",e.message); return []; }
 }
 
@@ -1878,7 +1881,7 @@ function generarPassSegura(){
 // Sistema de recordatorios SA — toasts permanentes
 const _saRecordatorios = [];
 function agregarRecordatorioSA(id, mensaje, tipo="warn"){
-  if(_saRecordatorios.find(r=>r.id===id)) return; // no duplicar
+  if(_saRecordatorios.find(r=>r.id===id)) return;
   _saRecordatorios.push({id, mensaje, tipo, fecha:today()});
   mostrarBannerRecordatoriosSA();
 }
@@ -1886,6 +1889,17 @@ function eliminarRecordatorioSA(id){
   const idx=_saRecordatorios.findIndex(r=>r.id===id);
   if(idx>=0) _saRecordatorios.splice(idx,1);
   mostrarBannerRecordatoriosSA();
+  // Si es un recordatorio de credenciales, actualizar en Firebase y en _saEmpresas
+  if(id.startsWith("cred_")){
+    const empId=id.replace("cred_","");
+    const emp=_saEmpresas.find(e=>(e.id||e._id)===empId);
+    if(emp){
+      emp.credencialesEntregadas=true;
+      FB.setSA("empresa_"+empId, emp).catch(()=>{});
+      // Re-render para actualizar badge
+      if(document.getElementById("saListaEmpresas")) renderSATab();
+    }
+  }
 }
 function mostrarBannerRecordatoriosSA(){
   let banner=document.getElementById("saBannerRec");
@@ -1897,12 +1911,12 @@ function mostrarBannerRecordatoriosSA(){
   }
   banner.innerHTML=_saRecordatorios.map(r=>`
     <div style="background:${r.tipo==="warn"?"var(--accent)":"var(--red)"};color:var(--bg);
-      padding:.6rem 1rem;display:flex;justify-content:space-between;align-items:center;
-      font-size:.83rem;font-weight:600;gap:1rem">
+      padding:.65rem 1rem;display:flex;justify-content:space-between;align-items:center;
+      font-size:.83rem;font-weight:600;gap:1rem;flex-wrap:wrap">
       <span>⚠️ ${r.mensaje}</span>
       <button onclick="eliminarRecordatorioSA('${r.id}')"
-        style="background:rgba(0,0,0,.2);border:none;border-radius:6px;padding:.2rem .6rem;
-        cursor:pointer;color:inherit;font-size:.8rem">✓ Listo</button>
+        style="background:rgba(0,0,0,.25);border:none;border-radius:6px;padding:.25rem .75rem;
+        cursor:pointer;color:inherit;font-size:.8rem;white-space:nowrap">✓ Marcar listo</button>
     </div>`).join("");
 }
 
@@ -2110,6 +2124,18 @@ NOTAS: ${emp.notas||"—"}`;
     toast("✅ Marcado como entregado","ok");
     renderSATab();
   }));
+
+  // ── También el toast de recordatorio tiene botón "Listo" ──
+  // que llama eliminarRecordatorioSA — pero también necesita
+  // actualizar credencialesEntregadas en Firebase
+  document.querySelectorAll("[data-dismiss-cred]").forEach(b=>{
+    b.addEventListener("click",async()=>{
+      const empId=b.dataset.dismissCred;
+      const emp=_saEmpresas.find(e=>(e.id||e._id)===empId);
+      if(emp){ emp.credencialesEntregadas=true; await FB.setSA("empresa_"+empId,emp); }
+      eliminarRecordatorioSA("cred_"+empId);
+    });
+  });
 
   $$(".sa-suspender").forEach(b=>b.addEventListener("click",async()=>{
     const emp=_saEmpresas.find(e=>(e.id||e._id)===b.dataset.id); if(!emp) return;
@@ -3487,41 +3513,671 @@ function renderEmpleados(desde="", hasta=""){
 // ════════════════════════════════════════════════════════════
 //  REPORTES
 // ════════════════════════════════════════════════════════════
-function renderReportes(){
-  const totalIng=STATE.ingresos.reduce((s,i)=>s+i.total,0);
-  const totalGas=STATE.gastos.reduce((s,g)=>s+g.monto,0);
-  const hoy=today();
-  const ingHoy=STATE.ingresos.filter(i=>i.fecha===hoy).reduce((s,i)=>s+i.total,0);
-  const mesActual=hoy.slice(0,7);
-  const ingMes=STATE.ingresos.filter(i=>i.fecha.startsWith(mesActual)).reduce((s,i)=>s+i.total,0);
-  const gasMes=STATE.gastos.filter(g=>g.fecha.startsWith(mesActual)).reduce((s,g)=>s+g.monto,0);
+// ── Motor de reportes — calcula datos para cualquier rango ──
+function calcReporteData(desde, hasta){
+  const ings = STATE.ingresos.filter(i=>
+    i.metodoPago!=="ajuste" &&
+    (!desde||i.fecha>=desde) && (!hasta||i.fecha<=hasta)
+  );
+  const gas  = STATE.gastos.filter(g=>(!desde||g.fecha>=desde)&&(!hasta||g.fecha<=hasta));
+  const citas= STATE.citas.filter(c=>(!desde||c.fecha>=desde)&&(!hasta||c.fecha<=hasta));
 
-  return `<div class="page-header"><div class="page-title">◉ Reportes</div></div>
-  <div class="stats-grid">
-    <div class="stat"><div class="stat-icon">📅</div><div class="stat-label">Ingresos Hoy</div><div class="stat-value c-green">${fmtMoney(ingHoy)}</div></div>
-    <div class="stat"><div class="stat-icon">📆</div><div class="stat-label">Ingresos Este Mes</div><div class="stat-value c-green">${fmtMoney(ingMes)}</div></div>
-    <div class="stat"><div class="stat-icon">💸</div><div class="stat-label">Gastos Este Mes</div><div class="stat-value c-red">${fmtMoney(gasMes)}</div></div>
-    <div class="stat"><div class="stat-icon">⚖️</div><div class="stat-label">Balance del Mes</div><div class="stat-value ${ingMes-gasMes>=0?"c-green":"c-red"}">${fmtMoney(ingMes-gasMes)}</div></div>
-  </div>
-  <div class="card">
-    <div class="card-title">Exportar datos</div>
-    <div class="card-sub">Descarga los datos en formato JSON o genera reportes</div>
-    <div style="display:flex;flex-wrap:wrap;gap:.75rem">
-      <button class="btn btn-outline" id="btnExportJSON">📤 Exportar backup JSON</button>
-      <button class="btn btn-outline" id="btnExportCSVIng">📊 Exportar ventas CSV</button>
-      <button class="btn btn-outline" id="btnExportCSVGas">📊 Exportar gastos CSV</button>
-      <button class="btn btn-ghost" id="btnImportJSON">📥 Importar backup JSON</button>
-      <button class="btn btn-ghost" id="btnRestaurarAuto">🔄 Restaurar backup auto</button>
+  const totalIng = ings.reduce((s,i)=>s+i.total,0);
+  const totalGas = gas.reduce((s,g)=>s+g.monto,0);
+  const utilidad  = totalIng - totalGas;
+
+  // Visitas únicas
+  const visitas = [...new Set(ings.map(i=>i.visitaId||("v"+i.id)))];
+  const ticketProm = visitas.length ? totalIng/visitas.length : 0;
+
+  // Por producto
+  const porProd = {};
+  ings.forEach(i=>{
+    const p=STATE.productos.find(pr=>pr.id===i.productoId);
+    const nombre=p?.nombre||"Sin nombre";
+    if(!porProd[nombre]) porProd[nombre]={nombre,qty:0,revenue:0};
+    porProd[nombre].qty+=i.cantidad;
+    porProd[nombre].revenue+=i.total;
+  });
+  const topProds = Object.values(porProd).sort((a,b)=>b.revenue-a.revenue);
+  const sinMovimiento = STATE.productos.filter(p=>{
+    const d30=new Date(); d30.setDate(d30.getDate()-30);
+    const d30s=d30.toISOString().slice(0,10);
+    return !STATE.ingresos.some(i=>i.productoId===p.id && i.fecha>=d30s);
+  });
+
+  // Por hora
+  const porHora = Array(24).fill(0);
+  ings.forEach(i=>{
+    if(i.hora){ const h=parseInt(i.hora.split(":")[0]); if(h>=0&&h<24) porHora[h]+=i.total; }
+  });
+
+  // Por día de semana
+  const dias=["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
+  const porDia = Array(7).fill(0);
+  ings.forEach(i=>{
+    if(i.fecha){ const d=new Date(i.fecha+"T12:00:00"); porDia[d.getDay()]+=i.total; }
+  });
+
+  // Por semana
+  const porSemana = {};
+  ings.forEach(i=>{
+    if(!i.fecha) return;
+    const d=new Date(i.fecha+"T12:00:00");
+    const dow=d.getDay(); const diff=d.getDate()-dow+(dow===0?-6:1);
+    const lun=new Date(d.setDate(diff));
+    const key=lun.toISOString().slice(0,10);
+    if(!porSemana[key]) porSemana[key]=0;
+    porSemana[key]+=i.total;
+  });
+
+  // Por mes
+  const porMes = {};
+  ings.forEach(i=>{
+    if(!i.fecha) return;
+    const m=i.fecha.slice(0,7);
+    if(!porMes[m]) porMes[m]=0;
+    porMes[m]+=i.total;
+  });
+
+  // Por empleado
+  const porEmp = {};
+  ings.forEach(i=>{
+    const e=STATE.usuarios.find(u=>u.id===i.empleadoId);
+    const nombre=e?.nombre||e?.username||"Sin asignar";
+    if(!porEmp[nombre]) porEmp[nombre]={nombre,qty:0,revenue:0,comision:0};
+    porEmp[nombre].qty+=i.cantidad; porEmp[nombre].revenue+=i.total;
+    porEmp[nombre].comision+=i.total*((e?.comision||0)/100);
+  });
+
+  // Por cliente
+  const porCli = {};
+  ings.forEach(i=>{
+    const c=STATE.clientes.find(x=>x.id===i.clienteId);
+    const nombre=c?.nombre||"Consumidor Final";
+    if(!porCli[nombre]) porCli[nombre]={nombre,visitas:new Set(),revenue:0};
+    porCli[nombre].visitas.add(i.visitaId||("v"+i.id));
+    porCli[nombre].revenue+=i.total;
+  });
+  const topClis=Object.values(porCli).map(c=>({...c,visitas:c.visitas.size})).sort((a,b)=>b.revenue-a.revenue);
+
+  // Clientes sin visita >30 días
+  const hoy=today();
+  const sinVisita30=STATE.clientes.filter(c=>{
+    const ultIngreso=STATE.ingresos.filter(i=>i.clienteId===c.id).sort((a,b)=>b.fecha.localeCompare(a.fecha))[0];
+    if(!ultIngreso) return true;
+    const d=new Date(hoy); d.setDate(d.getDate()-30);
+    return ultIngreso.fecha < d.toISOString().slice(0,10);
+  });
+
+  // Clientes nuevos vs recurrentes
+  const clientesNuevos=STATE.clientes.filter(c=>c.fechaRegistro>=desde&&c.fechaRegistro<=hasta).length;
+
+  // Gastos por categoría
+  const porCatGas = {};
+  gas.forEach(g=>{
+    const cat=g.categoria||"Sin categoría";
+    if(!porCatGas[cat]) porCatGas[cat]=0;
+    porCatGas[cat]+=g.monto;
+  });
+
+  // Métodos de pago
+  const porMetodo = {};
+  ings.forEach(i=>{
+    const m=i.metodoPago||"efectivo";
+    if(!porMetodo[m]) porMetodo[m]=0;
+    porMetodo[m]+=i.total;
+  });
+
+  // Proyección mensual (basada en días transcurridos)
+  const diasEnRango = desde&&hasta ? Math.max(1,Math.round((new Date(hasta)-new Date(desde))/86400000)) : 30;
+  const promedioD = totalIng / diasEnRango;
+  const proyeccion30 = promedioD * 30;
+
+  // Conversión citas → ventas
+  const totalCitas = citas.length;
+  const citasConVenta = citas.filter(c=>
+    ings.some(i=>i.clienteId===c.clienteId && i.fecha===c.fecha)
+  ).length;
+  const tasaConversion = totalCitas ? (citasConVenta/totalCitas*100) : 0;
+
+  // Comparativo mes anterior
+  const mesA = desde ? desde.slice(0,7) : hoy.slice(0,7);
+  const [anio,mes] = mesA.split("-").map(Number);
+  const mesAntStr = `${anio}${mes===1?`-${anio-1}-12`:`-${String(mes-1).padStart(2,"0")}`}`.replace(/^\d{4}/,anio-(mes===1?1:0));
+  const mesAntFormatted = mes===1 ? `${anio-1}-12` : `${anio}-${String(mes-1).padStart(2,"0")}`;
+  const ingsMesAnt=STATE.ingresos.filter(i=>i.fecha?.startsWith(mesAntFormatted)&&i.metodoPago!=="ajuste").reduce((s,i)=>s+i.total,0);
+  const cambioMes = ingsMesAnt>0 ? ((totalIng-ingsMesAnt)/ingsMesAnt*100) : 0;
+
+  return {
+    ings, gas, totalIng, totalGas, utilidad, visitas, ticketProm,
+    topProds, sinMovimiento, porHora, porDia, dias, porSemana, porMes,
+    porEmp, topClis, sinVisita30, clientesNuevos, porCatGas, porMetodo,
+    proyeccion30, promedioD, tasaConversion, totalCitas, citasConVenta,
+    ingsMesAnt, cambioMes, diasEnRango
+  };
+}
+
+function renderReportes(){
+  const hoy=today();
+  const mesActual=hoy.slice(0,7);
+  const d=calcReporteData(mesActual+"-01",hoy);
+  const bar=(val,max,color="var(--accent)")=>{
+    const pct=max>0?Math.round(val/max*100):0;
+    return `<div style="height:6px;background:var(--surface2);border-radius:3px;overflow:hidden;margin-top:3px">
+      <div style="height:100%;width:${pct}%;background:${color};border-radius:3px;transition:width .3s"></div></div>`;
+  };
+
+  return `<div class="page-header"><div class="page-title">◉ Reportes & Analytics</div>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+      <button class="btn btn-outline btn-sm" id="btnExportJSON">📤 Backup</button>
+      <button class="btn btn-outline btn-sm" id="btnExportCSVIng">📊 CSV Ventas</button>
+      <button class="btn btn-ghost btn-sm" id="btnImportJSON">📥 Importar</button>
     </div>
   </div>
-  <div class="card">
-    <div class="card-title">Reporte por rango de fechas</div>
-    <div class="form-grid" style="margin-bottom:1rem">
-      <div class="fg"><label>Desde</label><input id="repDesde" type="date"></div>
-      <div class="fg"><label>Hasta</label><input id="repHasta" type="date" value="${today()}"></div>
-      <div style="display:flex;align-items:flex-end"><button class="btn btn-primary" id="btnGenReporte">Generar</button></div>
+
+  <!-- FILTRO GLOBAL -->
+  <div class="card" style="margin-bottom:1.25rem">
+    <div style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:flex-end">
+      <div class="fg"><label>Desde</label><input id="repDesde" type="date" value="${mesActual+"-01"}"></div>
+      <div class="fg"><label>Hasta</label><input id="repHasta" type="date" value="${hoy}"></div>
+      <div style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:flex-end">
+        <button class="btn btn-ghost btn-xs" data-rango="hoy">Hoy</button>
+        <button class="btn btn-ghost btn-xs" data-rango="semana">Esta semana</button>
+        <button class="btn btn-ghost btn-xs" data-rango="mes">Este mes</button>
+        <button class="btn btn-ghost btn-xs" data-rango="trimestre">Trimestre</button>
+        <button class="btn btn-ghost btn-xs" data-rango="anio">Este año</button>
+        <button class="btn btn-primary btn-sm" id="btnGenReporte">Generar →</button>
+      </div>
     </div>
-    <div id="repResult"></div>
+  </div>
+
+  <!-- KPIs PRINCIPALES -->
+  <div class="stats-grid" id="repKpis">
+    <div class="stat"><div class="stat-icon">💰</div><div class="stat-label">Ingresos período</div><div class="stat-value c-green">${fmtMoney(d.totalIng)}</div></div>
+    <div class="stat"><div class="stat-icon">💸</div><div class="stat-label">Gastos período</div><div class="stat-value c-red">${fmtMoney(d.totalGas)}</div></div>
+    <div class="stat"><div class="stat-icon">📈</div><div class="stat-label">Utilidad neta</div><div class="stat-value ${d.utilidad>=0?"c-green":"c-red"}">${fmtMoney(d.utilidad)}</div></div>
+    <div class="stat"><div class="stat-icon">🧾</div><div class="stat-label">Ticket promedio</div><div class="stat-value c-accent">${fmtMoney(d.ticketProm)}</div></div>
+    <div class="stat"><div class="stat-icon">👥</div><div class="stat-label">Visitas únicas</div><div class="stat-value">${d.visitas.length}</div></div>
+    <div class="stat"><div class="stat-icon">📅</div><div class="stat-label">vs mes anterior</div>
+      <div class="stat-value ${d.cambioMes>=0?"c-green":"c-red"}">${d.cambioMes>=0?"+":""}${d.cambioMes.toFixed(1)}%</div></div>
+    <div class="stat"><div class="stat-icon">🎯</div><div class="stat-label">Proyección 30d</div><div class="stat-value c-blue">${fmtMoney(d.proyeccion30)}</div></div>
+    <div class="stat"><div class="stat-icon">🔄</div><div class="stat-label">Conversión citas</div><div class="stat-value">${d.tasaConversion.toFixed(1)}%</div></div>
+  </div>
+
+  <div id="repAllReportes">
+  ${buildAllReportes(d, bar)}
+  </div>`;
+}
+
+function buildAllReportes(d, bar){
+  const fmtM = fmtMoney;
+  const maxHora = Math.max(...d.porHora,1);
+  const maxDia  = Math.max(...d.porDia,1);
+  const maxProd = d.topProds[0]?.revenue||1;
+  const maxEmp  = Math.max(...Object.values(d.porEmp).map(e=>e.revenue),1);
+  const maxCli  = d.topClis[0]?.revenue||1;
+
+  return `
+  <!-- ══ SECCIÓN VENTAS ══ -->
+  <div style="font-size:.78rem;font-weight:800;color:var(--accent);letter-spacing:.1em;text-transform:uppercase;margin:1.25rem 0 .75rem">
+    📊 Análisis de Ventas
+  </div>
+  <div class="two-col" style="align-items:start">
+
+    <!-- R1: Ventas por hora -->
+    <div class="card">
+      <div class="card-title">1. Mapa de calor — Tráfico por hora</div>
+      <div class="card-sub">Identifica la hora pico de operaciones</div>
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:.3rem;margin-top:.5rem">
+        ${d.porHora.map((v,h)=>`
+          <div style="text-align:center">
+            <div style="font-size:.65rem;color:var(--text2)">${h}h</div>
+            <div style="height:${Math.max(4,Math.round(v/maxHora*60))}px;
+              background:${v===Math.max(...d.porHora)?"var(--accent)":v>maxHora*.5?"var(--blue)":"var(--surface3)"};
+              border-radius:3px;margin:.1rem 0"></div>
+            <div style="font-size:.6rem;color:var(--text3)">${v>0?fmtM(v):""}</div>
+          </div>`).join("")}
+      </div>
+      <div style="margin-top:.5rem;font-size:.78rem;color:var(--text2)">
+        Hora pico: <strong>${d.porHora.indexOf(Math.max(...d.porHora))}:00 — ${fmtM(Math.max(...d.porHora))}</strong>
+      </div>
+    </div>
+
+    <!-- R2: Ventas por día de semana -->
+    <div class="card">
+      <div class="card-title">2. Ventas por día de semana</div>
+      <div class="card-sub">¿Qué días son más rentables?</div>
+      ${d.porDia.map((v,i)=>`
+        <div style="display:flex;align-items:center;gap:.5rem;margin:.35rem 0">
+          <span style="width:28px;font-size:.78rem;font-weight:600;color:var(--text2)">${d.dias[i]}</span>
+          <div style="flex:1">${bar(v,maxDia,v===Math.max(...d.porDia)?"var(--accent)":"var(--blue)")}</div>
+          <span style="font-size:.78rem;font-weight:600;min-width:60px;text-align:right">${fmtM(v)}</span>
+        </div>`).join("")}
+    </div>
+
+    <!-- R3: Ventas por semana -->
+    <div class="card">
+      <div class="card-title">3. Tendencia semanal</div>
+      <div class="card-sub">Evolución semana a semana</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Semana inicio</th><th class="amt">Total</th></tr></thead>
+        <tbody>
+        ${Object.entries(d.porSemana).sort((a,b)=>a[0].localeCompare(b[0])).map(([sem,val])=>`
+          <tr><td style="font-size:.8rem">${sem}</td><td class="amt-green">${fmtM(val)}</td></tr>`).join("")||"<tr><td colspan='2' style='text-align:center;color:var(--text2)'>Sin datos</td></tr>"}
+        </tbody>
+      </table></div>
+    </div>
+
+    <!-- R4: Ventas por mes -->
+    <div class="card">
+      <div class="card-title">4. Tendencia mensual</div>
+      <div class="card-sub">Histórico mes a mes</div>
+      ${Object.entries(d.porMes).sort((a,b)=>a[0].localeCompare(b[0])).map(([mes,val])=>{
+        const maxV=Math.max(...Object.values(d.porMes),1);
+        return `<div style="display:flex;align-items:center;gap:.5rem;margin:.3rem 0">
+          <span style="width:55px;font-size:.75rem;color:var(--text2)">${mes}</span>
+          <div style="flex:1">${bar(val,maxV)}</div>
+          <span style="font-size:.78rem;min-width:65px;text-align:right">${fmtM(val)}</span>
+        </div>`;
+      }).join("")||"<div style='color:var(--text2);font-size:.82rem'>Sin datos en el rango</div>"}
+    </div>
+
+    <!-- R5: Comparativo mes actual vs anterior -->
+    <div class="card">
+      <div class="card-title">5. Comparativo mes actual vs anterior</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:.5rem">
+        <div style="text-align:center;padding:1rem;background:var(--surface2);border-radius:var(--r)">
+          <div style="font-size:.75rem;color:var(--text2)">Mes anterior</div>
+          <div style="font-size:1.4rem;font-weight:800;color:var(--text)">${fmtM(d.ingsMesAnt)}</div>
+        </div>
+        <div style="text-align:center;padding:1rem;background:var(--surface2);border-radius:var(--r)">
+          <div style="font-size:.75rem;color:var(--text2)">Período actual</div>
+          <div style="font-size:1.4rem;font-weight:800;color:${d.totalIng>=d.ingsMesAnt?"var(--green)":"var(--red)"}">${fmtM(d.totalIng)}</div>
+        </div>
+      </div>
+      <div style="text-align:center;margin-top:.75rem;font-size:1.1rem;font-weight:700;color:${d.cambioMes>=0?"var(--green)":"var(--red)"}">
+        ${d.cambioMes>=0?"▲":"▼"} ${Math.abs(d.cambioMes).toFixed(1)}% vs mes anterior
+      </div>
+    </div>
+
+    <!-- R7: Proyección mensual -->
+    <div class="card">
+      <div class="card-title">7. Proyección a 30 días</div>
+      <div class="card-sub">Basada en el promedio del período seleccionado</div>
+      <div style="text-align:center;padding:1rem">
+        <div style="font-size:.8rem;color:var(--text2)">Promedio diario</div>
+        <div style="font-size:1.2rem;font-weight:700">${fmtM(d.promedioD)}/día</div>
+        <div style="font-size:.8rem;color:var(--text2);margin-top:.5rem">Proyección 30 días</div>
+        <div style="font-size:2rem;font-weight:800;color:var(--accent)">${fmtM(d.proyeccion30)}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ SECCIÓN PRODUCTOS ══ -->
+  <div style="font-size:.78rem;font-weight:800;color:var(--accent);letter-spacing:.1em;text-transform:uppercase;margin:1.25rem 0 .75rem">
+    🏆 Análisis de Productos y Servicios
+  </div>
+  <div class="two-col" style="align-items:start">
+
+    <!-- R6: Top productos -->
+    <div class="card">
+      <div class="card-title">6. Top 10 productos / servicios</div>
+      <div class="card-sub">Por revenue generado en el período</div>
+      ${d.topProds.slice(0,10).map((p,i)=>`
+        <div style="display:flex;align-items:center;gap:.5rem;margin:.4rem 0">
+          <span style="width:20px;font-size:.72rem;font-weight:700;color:var(--text3)">${i+1}</span>
+          <div style="flex:1">
+            <div style="font-size:.82rem;font-weight:600">${p.nombre}</div>
+            ${bar(p.revenue,maxProd)}
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:.82rem;font-weight:700">${fmtM(p.revenue)}</div>
+            <div style="font-size:.7rem;color:var(--text2)">${p.qty} uds</div>
+          </div>
+        </div>`).join("")||"<div style='color:var(--text2)'>Sin datos</div>"}
+    </div>
+
+    <!-- R8: Categoría más rentable -->
+    <div class="card">
+      <div class="card-title">8. Revenue por categoría</div>
+      <div class="card-sub">Categorías de productos y servicios</div>
+      ${(()=>{
+        const cats={};
+        d.ings.forEach(i=>{
+          const p=STATE.productos.find(pr=>pr.id===i.productoId);
+          const cat=p?.categoria||p?.tipo||"Sin categoría";
+          if(!cats[cat]) cats[cat]=0;
+          cats[cat]+=i.total;
+        });
+        const maxC=Math.max(...Object.values(cats),1);
+        return Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`
+          <div style="display:flex;align-items:center;gap:.5rem;margin:.35rem 0">
+            <span style="flex:1;font-size:.8rem">${c}</span>
+            <div style="width:100px">${bar(v,maxC)}</div>
+            <span style="font-size:.78rem;min-width:60px;text-align:right">${fmtM(v)}</span>
+          </div>`).join("")||"<div style='color:var(--text2)'>Sin datos</div>";
+      })()}
+    </div>
+
+    <!-- R9: Productos sin movimiento -->
+    <div class="card">
+      <div class="card-title">9. Productos sin movimiento — últimos 30 días</div>
+      <div class="card-sub">Considera descontinuar o promocionar estos productos</div>
+      ${d.sinMovimiento.length?
+        `<div class="table-wrap"><table>
+          <thead><tr><th>Producto</th><th>Tipo</th><th>Stock</th></tr></thead>
+          <tbody>
+          ${d.sinMovimiento.slice(0,10).map(p=>`<tr>
+            <td>${p.nombre}</td>
+            <td><span class="badge bg-gray">${p.tipo||"—"}</span></td>
+            <td class="amt">${p.stock??"—"}</td>
+          </tr>`).join("")}
+          </tbody>
+        </table></div>`:
+        `<div class="empty"><p>✅ Todos los productos tienen movimiento</p></div>`}
+    </div>
+
+    <!-- R22: Métodos de pago -->
+    <div class="card">
+      <div class="card-title">22. Métodos de pago más usados</div>
+      ${(()=>{
+        const maxM=Math.max(...Object.values(d.porMetodo),1);
+        return Object.entries(d.porMetodo).sort((a,b)=>b[1]-a[1]).map(([m,v])=>`
+          <div style="display:flex;align-items:center;gap:.5rem;margin:.35rem 0">
+            <span style="flex:1;font-size:.82rem;font-weight:600;text-transform:capitalize">${m}</span>
+            <div style="width:80px">${bar(v,maxM,"var(--green)")}</div>
+            <span style="font-size:.78rem;min-width:60px;text-align:right">${fmtM(v)}</span>
+          </div>`).join("")||"<div style='color:var(--text2)'>Sin datos</div>";
+      })()}
+    </div>
+  </div>
+
+  <!-- ══ SECCIÓN CLIENTES ══ -->
+  <div style="font-size:.78rem;font-weight:800;color:var(--accent);letter-spacing:.1em;text-transform:uppercase;margin:1.25rem 0 .75rem">
+    👥 Análisis de Clientes
+  </div>
+  <div class="two-col" style="align-items:start">
+
+    <!-- R10: Clientes nuevos vs recurrentes -->
+    <div class="card">
+      <div class="card-title">10. Clientes nuevos vs recurrentes</div>
+      ${(()=>{
+        const clientesConVenta=new Set(d.ings.filter(i=>i.clienteId).map(i=>i.clienteId));
+        const nuevos=STATE.clientes.filter(c=>c.id&&!STATE.ingresos.some(i=>i.clienteId===c.id&&i.fecha<(d.ings[0]?.fecha||today()))).length;
+        const recurrentes=clientesConVenta.size - nuevos;
+        const total=clientesConVenta.size||1;
+        return `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:.5rem">
+          <div style="text-align:center;padding:.75rem;background:var(--green-dim);border-radius:var(--r)">
+            <div style="font-size:1.6rem;font-weight:800;color:var(--green)">${clientesConVenta.size}</div>
+            <div style="font-size:.75rem;color:var(--text2)">Clientes activos</div>
+          </div>
+          <div style="text-align:center;padding:.75rem;background:var(--blue-dim);border-radius:var(--r)">
+            <div style="font-size:1.6rem;font-weight:800;color:var(--blue)">${STATE.clientes.length}</div>
+            <div style="font-size:.75rem;color:var(--text2)">Total registrados</div>
+          </div>
+        </div>`;
+      })()}
+    </div>
+
+    <!-- R11: Top clientes -->
+    <div class="card">
+      <div class="card-title">11. Top clientes por gasto</div>
+      ${d.topClis.slice(0,8).map((c,i)=>`
+        <div style="display:flex;align-items:center;gap:.5rem;margin:.35rem 0">
+          <span style="width:18px;font-size:.7rem;color:var(--text3)">${i+1}</span>
+          <div style="flex:1">
+            <div style="font-size:.82rem;font-weight:600">${c.nombre}</div>
+            ${bar(c.revenue,maxCli,"var(--green)")}
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:.82rem">${fmtM(c.revenue)}</div>
+            <div style="font-size:.7rem;color:var(--text2)">${c.visitas} visitas</div>
+          </div>
+        </div>`).join("")||"<div style='color:var(--text2)'>Sin datos</div>"}
+    </div>
+
+    <!-- R12: Clientes en riesgo de pérdida -->
+    <div class="card">
+      <div class="card-title">12. Clientes sin visita — últimos 30 días ⚠️</div>
+      <div class="card-sub">Candidatos para campaña de reactivación (${d.sinVisita30.length} clientes)</div>
+      ${d.sinVisita30.length?
+        `<div class="table-wrap"><table>
+          <thead><tr><th>Cliente</th><th>Teléfono</th><th>Última visita</th></tr></thead>
+          <tbody>
+          ${d.sinVisita30.slice(0,10).map(c=>{
+            const ultI=STATE.ingresos.filter(i=>i.clienteId===c.id).sort((a,b)=>b.fecha.localeCompare(a.fecha))[0];
+            return `<tr>
+              <td><strong>${c.nombre}</strong></td>
+              <td>${c.telefono||"—"}</td>
+              <td style="font-size:.78rem;color:var(--red)">${ultI?.fecha||"Nunca"}</td>
+            </tr>`;
+          }).join("")}
+          </tbody>
+        </table></div>`:
+        `<div class="empty"><p>✅ Todos los clientes visitaron recientemente</p></div>`}
+    </div>
+
+    <!-- R13: Frecuencia promedio de visita -->
+    <div class="card">
+      <div class="card-title">13. Frecuencia promedio de visita</div>
+      ${(()=>{
+        const freqs=STATE.clientes.map(c=>{
+          const vis=STATE.ingresos.filter(i=>i.clienteId===c.id).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+          if(vis.length<2) return null;
+          let sumDias=0;
+          for(let i=1;i<vis.length;i++){
+            sumDias+=(new Date(vis[i].fecha)-new Date(vis[i-1].fecha))/86400000;
+          }
+          return sumDias/(vis.length-1);
+        }).filter(Boolean);
+        const prom=freqs.length?freqs.reduce((s,f)=>s+f,0)/freqs.length:0;
+        return `
+        <div style="text-align:center;padding:1rem">
+          <div style="font-size:2.5rem;font-weight:800;color:var(--accent)">${Math.round(prom)}</div>
+          <div style="font-size:.85rem;color:var(--text2)">días promedio entre visitas</div>
+          <div style="font-size:.78rem;color:var(--text2);margin-top:.5rem">Basado en ${freqs.length} clientes con 2+ visitas</div>
+        </div>`;
+      })()}
+    </div>
+  </div>
+
+  <!-- ══ SECCIÓN EMPLEADOS ══ -->
+  <div style="font-size:.78rem;font-weight:800;color:var(--accent);letter-spacing:.1em;text-transform:uppercase;margin:1.25rem 0 .75rem">
+    👨‍💼 Análisis de Empleados
+  </div>
+  <div class="two-col" style="align-items:start">
+
+    <!-- R14: Ventas por empleado -->
+    <div class="card">
+      <div class="card-title">14. Rendimiento por empleado</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Empleado</th><th>Visitas</th><th>Revenue</th><th>Comisión</th></tr></thead>
+        <tbody>
+        ${Object.values(d.porEmp).sort((a,b)=>b.revenue-a.revenue).map(e=>`<tr>
+          <td><strong>${e.nombre}</strong></td>
+          <td class="amt-blue">${e.qty}</td>
+          <td class="amt-green">${fmtM(e.revenue)}</td>
+          <td class="amt-accent">${fmtM(e.comision)}</td>
+        </tr>`).join("")||"<tr><td colspan='4' style='text-align:center;color:var(--text2)'>Sin datos</td></tr>"}
+        </tbody>
+      </table></div>
+    </div>
+
+    <!-- R15: Comisiones acumuladas -->
+    <div class="card">
+      <div class="card-title">15. Comisiones acumuladas en el período</div>
+      ${Object.values(d.porEmp).sort((a,b)=>b.comision-a.comision).map(e=>`
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:.4rem 0;border-bottom:1px solid var(--border);font-size:.85rem">
+          <span>${e.nombre}</span>
+          <span class="amt-accent" style="font-weight:700">${fmtM(e.comision)}</span>
+        </div>`).join("")||"<div style='color:var(--text2)'>Sin datos</div>"}
+      <div style="display:flex;justify-content:space-between;font-weight:800;padding:.5rem 0;font-size:.9rem">
+        <span>Total a pagar:</span>
+        <span style="color:var(--accent)">${fmtM(Object.values(d.porEmp).reduce((s,e)=>s+e.comision,0))}</span>
+      </div>
+    </div>
+
+    <!-- R16: Productividad por empleado -->
+    <div class="card">
+      <div class="card-title">16. Ticket promedio por empleado</div>
+      ${Object.values(d.porEmp).sort((a,b)=>b.revenue-a.revenue).map(e=>{
+        const ticket=e.qty>0?e.revenue/e.qty:0;
+        return `<div style="display:flex;align-items:center;gap:.5rem;margin:.35rem 0">
+          <span style="flex:1;font-size:.82rem">${e.nombre}</span>
+          ${bar(ticket,maxEmp,"var(--purple)")}
+          <span style="font-size:.78rem;min-width:60px;text-align:right">${fmtM(ticket)}</span>
+        </div>`;
+      }).join("")||"<div style='color:var(--text2)'>Sin datos</div>"}
+    </div>
+  </div>
+
+  <!-- ══ SECCIÓN FINANCIERO ══ -->
+  <div style="font-size:.78rem;font-weight:800;color:var(--accent);letter-spacing:.1em;text-transform:uppercase;margin:1.25rem 0 .75rem">
+    💰 Análisis Financiero
+  </div>
+  <div class="two-col" style="align-items:start">
+
+    <!-- R17: P&L simplificado -->
+    <div class="card">
+      <div class="card-title">17. Estado de Resultados (P&L)</div>
+      ${[
+        ["Ingresos brutos", d.totalIng, "green"],
+        ["Total gastos", -d.totalGas, "red"],
+        ["Utilidad bruta", d.utilidad, d.utilidad>=0?"green":"red"]
+      ].map(([label,val,color])=>`
+        <div style="display:flex;justify-content:space-between;padding:.5rem 0;
+          border-bottom:1px solid var(--border);font-size:.85rem;
+          ${label==="Utilidad bruta"?"font-weight:800;font-size:.95rem":""}">
+          <span>${label}</span>
+          <span class="c-${color}">${val<0?"-":"+"}${fmtM(Math.abs(val))}</span>
+        </div>`).join("")}
+      <div style="text-align:center;margin-top:.75rem;font-size:.82rem;color:var(--text2)">
+        Margen neto: <strong class="${d.utilidad>=0?"c-green":"c-red"}">${d.totalIng>0?(d.utilidad/d.totalIng*100).toFixed(1):0}%</strong>
+      </div>
+    </div>
+
+    <!-- R18: Gastos por categoría -->
+    <div class="card">
+      <div class="card-title">18. Gastos por categoría</div>
+      ${(()=>{
+        const maxG=Math.max(...Object.values(d.porCatGas),1);
+        return Object.entries(d.porCatGas).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`
+          <div style="display:flex;align-items:center;gap:.5rem;margin:.35rem 0">
+            <span style="flex:1;font-size:.82rem">${c}</span>
+            ${bar(v,maxG,"var(--red)")}
+            <span style="font-size:.78rem;min-width:60px;text-align:right">${fmtM(v)}</span>
+          </div>`).join("")||"<div style='color:var(--text2)'>Sin gastos en el período</div>";
+      })()}
+    </div>
+
+    <!-- R19: Flujo de caja diario -->
+    <div class="card">
+      <div class="card-title">19. Flujo de caja diario</div>
+      <div class="card-sub">Ingresos y gastos día a día</div>
+      <div class="table-wrap" style="max-height:280px;overflow-y:auto"><table>
+        <thead><tr><th>Fecha</th><th>Ingresos</th><th>Gastos</th><th>Neto</th></tr></thead>
+        <tbody>
+        ${(()=>{
+          const fechas=[...new Set([...d.ings.map(i=>i.fecha),...d.gas.map(g=>g.fecha)])].sort().reverse();
+          return fechas.slice(0,20).map(f=>{
+            const ing=d.ings.filter(i=>i.fecha===f).reduce((s,i)=>s+i.total,0);
+            const gas=d.gas.filter(g=>g.fecha===f).reduce((s,g)=>s+g.monto,0);
+            const neto=ing-gas;
+            return `<tr>
+              <td style="font-size:.78rem">${f}</td>
+              <td class="amt-green">${fmtM(ing)}</td>
+              <td class="amt-red">${fmtM(gas)}</td>
+              <td class="${neto>=0?"amt-green":"amt-red"}" style="font-weight:700">${fmtM(neto)}</td>
+            </tr>`;
+          }).join("")||"<tr><td colspan='4' style='text-align:center;color:var(--text2)'>Sin datos</td></tr>";
+        })()}
+        </tbody>
+      </table></div>
+    </div>
+
+    <!-- R20: Proyección financiera -->
+    <div class="card">
+      <div class="card-title">20. Proyección financiera</div>
+      <div class="card-sub">Basada en tendencia del período</div>
+      ${[
+        ["Promedio diario ingresos", d.promedioD],
+        ["Proyección 30 días", d.proyeccion30],
+        ["Proyección 90 días", d.proyeccion30*3],
+        ["Proyección anual", d.proyeccion30*12],
+      ].map(([label,val])=>`
+        <div style="display:flex;justify-content:space-between;padding:.45rem 0;border-bottom:1px solid var(--border);font-size:.85rem">
+          <span style="color:var(--text2)">${label}</span>
+          <strong class="c-green">${fmtM(val)}</strong>
+        </div>`).join("")}
+      <div style="font-size:.72rem;color:var(--text3);margin-top:.5rem">⚠️ Proyección estimada basada en el período seleccionado</div>
+    </div>
+  </div>
+
+  <!-- ══ SECCIÓN OPERACIONAL ══ -->
+  <div style="font-size:.78rem;font-weight:800;color:var(--accent);letter-spacing:.1em;text-transform:uppercase;margin:1.25rem 0 .75rem">
+    📅 Análisis Operacional
+  </div>
+  <div class="two-col" style="align-items:start">
+
+    <!-- R21: Conversión citas → ventas -->
+    <div class="card">
+      <div class="card-title">21. Conversión: Citas → Ventas</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.5rem;margin-top:.5rem;text-align:center">
+        <div style="padding:.5rem;background:var(--surface2);border-radius:var(--r)">
+          <div style="font-size:1.4rem;font-weight:800">${d.totalCitas}</div>
+          <div style="font-size:.72rem;color:var(--text2)">Citas agendadas</div>
+        </div>
+        <div style="padding:.5rem;background:var(--green-dim);border-radius:var(--r)">
+          <div style="font-size:1.4rem;font-weight:800;color:var(--green)">${d.citasConVenta}</div>
+          <div style="font-size:.72rem;color:var(--text2)">Convertidas</div>
+        </div>
+        <div style="padding:.5rem;background:var(--accent-dim);border-radius:var(--r)">
+          <div style="font-size:1.4rem;font-weight:800;color:var(--accent)">${d.tasaConversion.toFixed(1)}%</div>
+          <div style="font-size:.72rem;color:var(--text2)">Tasa conversión</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- R23: Hora pico resumen -->
+    <div class="card">
+      <div class="card-title">23. Resumen operacional — Hora pico</div>
+      ${(()=>{
+        const horaMax=d.porHora.indexOf(Math.max(...d.porHora));
+        const diaMax=d.porDia.indexOf(Math.max(...d.porDia));
+        const prodTop=d.topProds[0];
+        const empTop=Object.values(d.porEmp).sort((a,b)=>b.revenue-a.revenue)[0];
+        return `
+        <div style="display:flex;flex-direction:column;gap:.5rem;margin-top:.25rem">
+          ${[
+            ["⏰ Hora pico", `${horaMax}:00 — ${fmtM(d.porHora[horaMax])}`],
+            ["📅 Día más rentable", `${d.dias[diaMax]} — ${fmtM(d.porDia[diaMax])}`],
+            ["🏆 Producto líder", prodTop?`${prodTop.nombre} (${fmtM(prodTop.revenue)})` : "—"],
+            ["👤 Empleado top", empTop?`${empTop.nombre} (${fmtM(empTop.revenue)})` : "—"],
+            ["🎯 Ticket promedio", fmtM(d.ticketProm)],
+            ["📈 Margen neto", `${d.totalIng>0?(d.utilidad/d.totalIng*100).toFixed(1):0}%`],
+          ].map(([k,v])=>`
+            <div style="display:flex;justify-content:space-between;padding:.35rem 0;
+              border-bottom:1px solid var(--border);font-size:.82rem">
+              <span style="color:var(--text2)">${k}</span>
+              <strong>${v}</strong>
+            </div>`).join("")}
+        </div>`;
+      })()}
+    </div>
+  </div>
+
+  <!-- Exportar -->
+  <div class="card" style="margin-top:1.25rem">
+    <div class="card-title">📤 Exportar datos</div>
+    <div style="display:flex;flex-wrap:wrap;gap:.5rem">
+      <button class="btn btn-outline btn-sm" id="btnExportJSON">📦 Backup JSON</button>
+      <button class="btn btn-outline btn-sm" id="btnExportCSVIng">📊 Ventas CSV</button>
+      <button class="btn btn-outline btn-sm" id="btnExportCSVGas">📊 Gastos CSV</button>
+      <button class="btn btn-ghost btn-sm" id="btnImportJSON">📥 Importar backup</button>
+      <button class="btn btn-ghost btn-sm" id="btnRestaurarAuto">🔄 Restaurar auto</button>
+    </div>
   </div>`;
 }
 
@@ -4643,20 +5299,63 @@ function attachReportesEvents(){
     exportCSV(rows.join("\n"),`gastos_${today()}.csv`); toast("📊 CSV exportado","ok");
   });
 
+  // Botones de rango rápido
+  $$("[data-rango]").forEach(btn=>btn.addEventListener("click",()=>{
+    const hoy=today();
+    const d=new Date();
+    let desde="", hasta=hoy;
+    if(btn.dataset.rango==="hoy"){ desde=hoy; }
+    else if(btn.dataset.rango==="semana"){
+      const dow=d.getDay(); const lun=new Date(d);
+      lun.setDate(d.getDate()-(dow===0?6:dow-1));
+      desde=lun.toISOString().slice(0,10);
+    }
+    else if(btn.dataset.rango==="mes"){ desde=hoy.slice(0,7)+"-01"; }
+    else if(btn.dataset.rango==="trimestre"){
+      const mes=d.getMonth(); const ini=Math.floor(mes/3)*3;
+      desde=`${d.getFullYear()}-${String(ini+1).padStart(2,"0")}-01`;
+    }
+    else if(btn.dataset.rango==="anio"){ desde=hoy.slice(0,4)+"-01-01"; }
+    if($("repDesde")) $("repDesde").value=desde;
+    if($("repHasta")) $("repHasta").value=hasta;
+    generarReportes(desde, hasta);
+  }));
+
   $("btnGenReporte")?.addEventListener("click",()=>{
-    const desde=$("repDesde")?.value, hasta=$("repHasta")?.value;
-    const ings=STATE.ingresos.filter(i=>(!desde||i.fecha>=desde)&&(!hasta||i.fecha<=hasta));
-    const gas=STATE.gastos.filter(g=>(!desde||g.fecha>=desde)&&(!hasta||g.fecha<=hasta));
-    const totalIng=ings.reduce((s,i)=>s+i.total,0);
-    const totalGas=gas.reduce((s,g)=>s+g.monto,0);
-    const html=`<div class="stats-grid">
-      <div class="stat"><div class="stat-label">Ingresos</div><div class="stat-value c-green">${fmtMoney(totalIng)}</div></div>
-      <div class="stat"><div class="stat-label">Gastos</div><div class="stat-value c-red">${fmtMoney(totalGas)}</div></div>
-      <div class="stat"><div class="stat-label">Balance</div><div class="stat-value ${totalIng-totalGas>=0?"c-green":"c-red"}">${fmtMoney(totalIng-totalGas)}</div></div>
-      <div class="stat"><div class="stat-label">N° ventas</div><div class="stat-value">${ings.length}</div></div>
-    </div>`;
-    const result=$("repResult"); if(result) result.innerHTML=html;
+    const desde=$("repDesde")?.value||"";
+    const hasta=$("repHasta")?.value||today();
+    generarReportes(desde, hasta);
   });
+}
+
+function generarReportes(desde, hasta){
+  const kpis=$("repKpis");
+  const all=$("repAllReportes");
+  if(!kpis||!all) return;
+
+  const d=calcReporteData(desde, hasta);
+  const bar=(val,max,color="var(--accent)")=>{
+    const pct=max>0?Math.round(val/max*100):0;
+    return `<div style="height:6px;background:var(--surface2);border-radius:3px;overflow:hidden;margin-top:3px">
+      <div style="height:100%;width:${pct}%;background:${color};border-radius:3px"></div></div>`;
+  };
+
+  // Actualizar KPIs
+  kpis.innerHTML=`
+    <div class="stat"><div class="stat-icon">💰</div><div class="stat-label">Ingresos período</div><div class="stat-value c-green">${fmtMoney(d.totalIng)}</div></div>
+    <div class="stat"><div class="stat-icon">💸</div><div class="stat-label">Gastos período</div><div class="stat-value c-red">${fmtMoney(d.totalGas)}</div></div>
+    <div class="stat"><div class="stat-icon">📈</div><div class="stat-label">Utilidad neta</div><div class="stat-value ${d.utilidad>=0?"c-green":"c-red"}">${fmtMoney(d.utilidad)}</div></div>
+    <div class="stat"><div class="stat-icon">🧾</div><div class="stat-label">Ticket promedio</div><div class="stat-value c-accent">${fmtMoney(d.ticketProm)}</div></div>
+    <div class="stat"><div class="stat-icon">👥</div><div class="stat-label">Visitas únicas</div><div class="stat-value">${d.visitas.length}</div></div>
+    <div class="stat"><div class="stat-icon">📅</div><div class="stat-label">vs mes anterior</div>
+      <div class="stat-value ${d.cambioMes>=0?"c-green":"c-red"}">${d.cambioMes>=0?"+":""}${d.cambioMes.toFixed(1)}%</div></div>
+    <div class="stat"><div class="stat-icon">🎯</div><div class="stat-label">Proyección 30d</div><div class="stat-value c-blue">${fmtMoney(d.proyeccion30)}</div></div>
+    <div class="stat"><div class="stat-icon">🔄</div><div class="stat-label">Conversión citas</div><div class="stat-value">${d.tasaConversion.toFixed(1)}%</div></div>
+  `;
+
+  // Actualizar todos los reportes
+  all.innerHTML=buildAllReportes(d, bar);
+  toast("📊 Reportes actualizados","ok",1500);
 }
 
 // ── EMPLEADOS ──
