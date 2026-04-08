@@ -1617,7 +1617,11 @@ function buildSAListaEmpresas(empresas, pricing){
         <td><span style="font-family:var(--mono);font-weight:700;color:var(--accent)">${e.id||"?"}</span></td>
         <td>
           <strong>${e.nombre||"—"}</strong>
-          ${!e.credencialesEntregadas?`<span class="badge bg-red" style="font-size:.65rem;margin-left:.3rem">⚠️ Pendiente entrega</span>`:`<span class="badge bg-green" style="font-size:.65rem;margin-left:.3rem">✓ Entregado</span>`}
+          ${!e.credencialesEntregadas
+            ? `<span class="badge bg-red sa-cred-entregada" data-id="${e.id||e._id}"
+                style="font-size:.65rem;margin-left:.3rem;cursor:pointer" title="Clic para marcar como entregado">
+                ⚠️ Pendiente — clic para entregar</span>`
+            : `<span class="badge bg-green" style="font-size:.65rem;margin-left:.3rem">✓ Entregado</span>`}
           <br><span style="font-size:.7rem;color:var(--text2)">${e.emailAdmin||""}</span>
         </td>
         <td><span class="badge bg-${planInfo?.color||"gray"}">${planInfo?.nombre||e.plan||"—"}</span>
@@ -1889,17 +1893,8 @@ function eliminarRecordatorioSA(id){
   const idx=_saRecordatorios.findIndex(r=>r.id===id);
   if(idx>=0) _saRecordatorios.splice(idx,1);
   mostrarBannerRecordatoriosSA();
-  // Si es un recordatorio de credenciales, actualizar en Firebase y en _saEmpresas
-  if(id.startsWith("cred_")){
-    const empId=id.replace("cred_","");
-    const emp=_saEmpresas.find(e=>(e.id||e._id)===empId);
-    if(emp){
-      emp.credencialesEntregadas=true;
-      FB.setSA("empresa_"+empId, emp).catch(()=>{});
-      // Re-render para actualizar badge
-      if(document.getElementById("saListaEmpresas")) renderSATab();
-    }
-  }
+  // No hacer Firebase calls aquí para evitar duplicados
+  // El guardado se hace desde el evento que llama a esta función
 }
 function mostrarBannerRecordatoriosSA(){
   let banner=document.getElementById("saBannerRec");
@@ -2115,27 +2110,27 @@ NOTAS: ${emp.notas||"—"}`;
     alert(info);
   }));
 
-  // ── Marcar credenciales como entregadas ──
+  // ── Marcar credenciales como entregadas (badge clickeable en tabla) ──
   $$(".sa-cred-entregada").forEach(b=>b.addEventListener("click",async()=>{
-    const emp=_saEmpresas.find(e=>(e.id||e._id)===b.dataset.id); if(!emp) return;
-    emp.credencialesEntregadas=true;
-    await FB.setSA("empresa_"+b.dataset.id,emp);
-    eliminarRecordatorioSA("cred_"+b.dataset.id);
-    toast("✅ Marcado como entregado","ok");
+    const empId = b.dataset.id;
+    const emp = _saEmpresas.find(e=>(e.id||e._id)===empId);
+    if(!emp) return;
+    if(!confirm2(`¿Marcar credenciales de "${emp.nombre}" como entregadas?`)) return;
+    // 1. Actualizar en memoria
+    emp.credencialesEntregadas = true;
+    // 2. Guardar en Firebase
+    try{
+      await FB.setSA("empresa_"+empId, emp);
+      toast(`✅ Credenciales de "${emp.nombre}" marcadas como entregadas`,"ok",3000);
+    }catch(e){
+      toast("⚠️ Error guardando en Firebase — actualizado localmente","warn");
+    }
+    // 3. Limpiar recordatorio del banner si existe
+    eliminarRecordatorioSA("cred_"+empId);
+    eliminarRecordatorioSA("otp_"+empId);
+    // 4. Re-render tabla
     renderSATab();
   }));
-
-  // ── También el toast de recordatorio tiene botón "Listo" ──
-  // que llama eliminarRecordatorioSA — pero también necesita
-  // actualizar credencialesEntregadas en Firebase
-  document.querySelectorAll("[data-dismiss-cred]").forEach(b=>{
-    b.addEventListener("click",async()=>{
-      const empId=b.dataset.dismissCred;
-      const emp=_saEmpresas.find(e=>(e.id||e._id)===empId);
-      if(emp){ emp.credencialesEntregadas=true; await FB.setSA("empresa_"+empId,emp); }
-      eliminarRecordatorioSA("cred_"+empId);
-    });
-  });
 
   $$(".sa-suspender").forEach(b=>b.addEventListener("click",async()=>{
     const emp=_saEmpresas.find(e=>(e.id||e._id)===b.dataset.id); if(!emp) return;
